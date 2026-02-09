@@ -1,0 +1,69 @@
+normalized_sku,sample_variations,cost_price
+1 LARGE + KIDS SAFETY COVER 4 SMALL,Kids_Safety_Cover_4_Small+1_Large,8.75
+2 LARGE + KIDS SAFETY COVER 8 SMALL,Kids_Safety_Cover_8_Small+2_Large,17.5
+BLACK 10 + BLUE 10 + GREEN 10 + PINK 10 + WHITE 10,"black-10,white-10,pink-10,green-10,blue-10, black-10,white-10,pink-10,green-10,blue-10-1",31
+BLACK 100,"-Black-100, BLACK-100, BLACK-100,, BLACK-100-', BLACK-100-. (+12 more)",53
+BLACK 100 + BLUE 100,"BLACK-100,BLUE-100, BLACK-100,BLUE-100-3, BLACK-100,BLUE-100.",106
+BLACK 100 + WHITE 100,"BLACK-100,WHITE-100-3",114
+BLACK 20 + BLUE 20 + GREEN 20 + GREY 20 + PINK 20,"pink-20,green-20,black-20,blue-20, grey-20",61
+BLACK 20 + BLUE 20 + GREEN 20 + PINK 20 + WHITE 20,"black-20,white-20,pink-20,green-20,blue-20, black-20,white-20,pink-20,green-20,blue-20-1",61
+BLACK 200,"BLACK-200, BLACK-200-1",106
+BLACK 25,"BLACK-25, BLACK-25,, BLACK-25-02, BLACK-25., BLACK25 (+2 more)",14
+BLACK 25 + BLUE 25,"BLACK-25+BLUE-25, BLACK-25, BLUE-25-1, BLACK-25,BLUE-25-",27
+BLACK 25 + BLUE 25 + PINK 25 + WHITE 25,"black-25,blue-25,white-25,pink-25, black-25,pink-25,white-25,blue-25",61
+BLACK 25 + GREEN 25,"BLACK-25, GREEN-25-0",31
+BLACK 25 + GREY 25,"BLACK-25, GREY-25-1",31
+BLACK 25 + ORANGE 25,"BLACK-25, ORANGE-25-0",31
+BLACK 25 + PINK 25,"BLACK 25, PINK-25-0",31
+BLACK 25 + WHITE 25,"BLACK-25,WHITE-25, BLACK-25,WHITE-25-",31
+BLACK 50,"BLACK-50, BLACK-50-., BLACK-50-0, BLACK-50-12, BLACK-50-14 (+6 more)",27
+BLACK 50 + BLUE 50,"BLACK-50,BLUE-50, BLACK-50,BLUE-50', BLACK-50,BLUE-50-., BLACK-50,BLUE-50-0, BLACK-50,BLUE-50-08 (+4 more)",53
+BLACK 50 + BLUE 50 + PINK 50 + WHITE 50,"black-50,pink-50,white-50,blue-50",114
+BLACK 50 + GREY 50,"grey-50,black-50, grey-50,black-50-1",61
+BLACK 50 + ORANGE 50,"BLACK-50,ORANGE-50-0",61
+BLACK 50 + PINK 50,"BLACK-50,PINK-50-, BLACK-50,PINK-50-0",61
+BLACK 50 + WHITE 50,"BLACK-50,WHITE-50, BLACK-50,WHITE-50-1, BLACK-50,WHITE-50-5",61
+BLUE 100,"blue-100', blue-100-', blue-100-,, blue-100-0, blue-100-1. (+11 more)",53
+BLUE 200,"blue-200-02, blue-200-11, blue-200-18, blue-200-21, blue-200-5",106
+BLUE 25,"blue-25-02, blue-25-1",14
+BLUE 25 + GREEN 25 + ORANGE 25 + PINK 25,"orange-25,blue-25,green-25,pink-25, orange-25,blue-25,green-25,pink-25-1",61
+BLUE 25 + PINK 25 + RED 25 + WHITE 25,"pink-25,blue-25,red-25,white-25",61
+BLUE 50,"blue-50-0, blue-50-14, blue-50-18, blue-50-19, blue-50-2",27
+BLUE 50 + WHITE 50,"blue-50,white-50",61
+CAP 100,"Surgical-cap-100-,, Surgical-cap-100--, Surgical-cap-100-;, surgical-cap-100",42
+CAP 50,surgical-cap-50,21
+COMBO HEEL + FOOT,combo-heel+foot,62
+EAR CLEANER BOX + FLASHLIGHT EAR PICK,"Ear_Cleaner_Box+Flashlight_Ear_Pick, Ear_Cleaner_Box+Flashlight_Ear_Pick-",22
+EARPLUG 10,"-ear-plug-10`, ear-plug-10, ear-plug-10-', ear-plug-10-., ear-plug-10-/ (+4 more)",80
+EARPLUG 5,"earplug--5--, earplug-5-1",40
+ELECTRIC HOT WATER BAG,"ELECTRIC-hot-water-bag, Electric-Hot-Water-Bag-00",52
+FOOT PAD 1 PAIR,foot-pad-1-pair-,40
+GREEN 100,"green-100, green-100-1, green-100-22, green-100.",61
+GREEN 25 + ORANGE 25 + PINK 25 + YELLOW 25,"yellow-25,orange-25,green-25,pink-25, yellow-25,orange-25,green-25,pink-25-1",61
+GREEN 50,green-50-0,31
+GREY 100,"grey-100, grey-100-., grey-100-9",61
+GREY 50,"grey-50, grey-50-1, grey-50-2, grey-50-5",31
+HEAT PAD ELECTRIC,"heat pad electric-10, heat pad electric-2",52
+HEAT PAD ELECTRIC + RUBBER BOTTLE,heat pad electric + rubber bottle-0,130
+HEEL PAD 2 PAIR,"heel-pad-2-pair, heel-pad-2-pairs, heel-pad-2-pairs,, heel-pad-2-pairs--, heel-pad-2-pairs.",44
+ICE BAG,"ICE BAG -  -, ICE BAG —, ICE--BAG, ICE-BAG-,, ice-bag-02",64
+KITCHEN WIRE BRUSH,"Kitchen-Wire-Brush, Kitchen-Wire-Brush_, Kitchen-Wire_Brush, Kitchen_Wire-Brush=, Kitchen_Wire_Brush1 (+1 more)",20
+MAGIC BOOK,"MAGIC-BOOK-1, magic-book, magic-book-010",45
+NYLON GLOVES PAIR OF 10,nylon-gloves-pair-of-10-00,170
+NYLON GLOVES PAIR OF 5,"nylon-gloves-pair-of-5-00, nylon-gloves-pair-of-5-04, nylon-gloves-pair-of-5-3",85
+ORANGE 100,orange-100,61
+ORANGE 50 + PINK 50,"pink-50,orange-50",61
+PINK 100,"pink-100-0, pink-100-1, pink-100-2, pink-100-4, pink-100-8",61
+PINK 200,pink-200-,122
+PINK 25,"pink-25, pink-25-1",16
+PINK 25 + WHITE 25,"pink-25,white-25, white-25,pink-25",31
+PINK 50,"pink-50-0, pink-50-01, pink-50-1, pink-50-2",31
+VELVET HOT WATER BAG,"VELVET-HOT_WATER_BAG, VELVET-hot-water-bag-04, VELVET-hot-water-bag., VELVET_HOT-WATER-BAG",77
+WHITE 100,"white-100-0, white-100-02, white-100-1, white-100-2, white-100-3 (+1 more)",61
+WHITE 200,white-200,122
+WHITE 25,white-25-03,16
+WHITE 50,"white-50-0, white-50-1, white-50-10",31
+WHITE N95 PACK OF 15,White-N95-Pack-of-15,45
+WHITE N95 PACK OF 25,White-N95-Pack-of-25,75
+WHITE N95 PACK OF 30,White-N95-Pack-of-30,90
+WHITE N95 PACK OF 5,White-N95-Pack-of-5,15
