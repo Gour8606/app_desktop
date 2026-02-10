@@ -14,17 +14,16 @@ from PySide6.QtCore import Qt
 from database import SessionLocal, engine, Base
 from models import MeeshoSale
 from import_logic import (
-    import_from_zip, import_inventory_data, import_payments_data,
-    import_invoice_data, import_flipkart_sales, import_flipkart_b2c, import_amazon_mtr, import_amazon_gstr1,
-    validate_meesho_tax_invoice_zip, validate_inventory_excel, validate_payments_zip, validate_invoices_zip,
+    import_from_zip, import_invoice_data, import_flipkart_sales, import_flipkart_b2c,
+    import_amazon_mtr, import_amazon_gstr1,
+    validate_meesho_tax_invoice_zip, validate_invoices_zip,
     validate_flipkart_sales_excel, validate_flipkart_gst_excel, validate_amazon_zip
 )
-from docissued import append_meesho_docs, append_meesho_docs_from_db, append_flipkart_section13, append_flipkart_docs_from_db, append_amazon_document_series, append_amazon_docs_from_db, generate_docs_csv_from_all
+from docissued import append_meesho_docs_from_db, append_flipkart_docs_from_db, append_amazon_docs_from_db
 from logic import (
     generate_gst_pivot_csv, generate_gst_hsn_pivot_csv,
     generate_b2b_csv, generate_hsn_b2b_csv, generate_b2cl_csv, generate_cdnr_csv, generate_gstr1_excel_workbook
 )
-from export import generate_catalog_summary_csv
 from auto_migrate import auto_migrate, verify_multi_seller_setup
 
 CONFIG_FILE = "config.json"
@@ -104,8 +103,6 @@ class DashboardApp(QMainWindow):
         # --- Action buttons in multiple rows ---
         # Import buttons
         self.btn_upload = QPushButton("Import Meesho GST Report (ZIP)")
-        self.btn_import_inventory = QPushButton("Import Meesho Inventory (Excel)")
-        self.btn_import_payments = QPushButton("Import Meesho Payments (ZIP)")
         self.btn_import_invoices = QPushButton("Import Meesho Tax Invoice (ZIP)")
         self.btn_import_flipkart_sales = QPushButton("Import Flipkart Sales (Excel)")
         self.btn_import_flipkart_gst = QPushButton("Import Flipkart GST (Excel)")
@@ -126,8 +123,8 @@ class DashboardApp(QMainWindow):
 
         # Style all buttons
         all_buttons = [
-            self.btn_upload, self.btn_import_inventory, self.btn_import_payments,
-            self.btn_import_invoices, self.btn_import_flipkart_sales, self.btn_import_flipkart_gst,
+            self.btn_upload, self.btn_import_invoices,
+            self.btn_import_flipkart_sales, self.btn_import_flipkart_gst,
             self.btn_import_amazon_b2b, self.btn_import_amazon_b2c, self.btn_import_amazon_gstr1,
             self.btn_b2cs_csv, self.btn_hsn_csv, self.btn_b2b, self.btn_hsn_b2b,
             self.btn_b2cl, self.btn_cdnr, self.btn_docs_csv, self.btn_gstr1_excel
@@ -140,8 +137,6 @@ class DashboardApp(QMainWindow):
         layout.addWidget(QLabel("Import Data:"))
         row1 = QHBoxLayout()
         row1.addWidget(self.btn_upload)
-        row1.addWidget(self.btn_import_inventory)
-        row1.addWidget(self.btn_import_payments)
         row1.addWidget(self.btn_import_invoices)
         layout.addLayout(row1)
         
@@ -197,8 +192,6 @@ class DashboardApp(QMainWindow):
         # Button connections
         # Import actions
         self.btn_upload.clicked.connect(self.import_meesho_gst_report)
-        self.btn_import_inventory.clicked.connect(self.import_inventory)
-        self.btn_import_payments.clicked.connect(self.import_payments)
         self.btn_import_invoices.clicked.connect(self.import_invoices)
         self.btn_import_flipkart_sales.clicked.connect(self.import_flipkart_sales)
         self.btn_import_flipkart_gst.clicked.connect(self.import_flipkart_gst)
@@ -377,64 +370,6 @@ class DashboardApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed: {e}")
             self.debug_output.append(f"❌ Error: {e}")
     
-    def import_inventory(self):
-        """Import inventory data from Excel file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Inventory Excel File", self.base_folder, "Excel Files (*.xlsx *.xls)"
-        )
-        if not file_path:
-            return
-        
-        # Validate file before importing
-        is_valid, message = validate_inventory_excel(file_path)
-        if not is_valid:
-            QMessageBox.warning(self, "Invalid File", message)
-            self.debug_output.append(message)
-            return
-        
-        try:
-            result = import_inventory_data(file_path, self.db)
-            QMessageBox.information(self, "Success", "Inventory imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📋 MEESHO INVENTORY IMPORT")
-            self.debug_output.append(f"{'='*60}")
-            self.debug_output.append(f"File: {os.path.basename(file_path)}")
-            self.debug_output.append('\n'.join(result))
-            self.debug_output.append(f"{'='*60}\n")
-            self.load_filters()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Import failed: {e}")
-            self.debug_output.append(f"❌ Error: {e}")
-    
-    def import_payments(self):
-        """Import payment data from ZIP file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Payments ZIP File", self.base_folder, "ZIP Files (*.zip)"
-        )
-        if not file_path:
-            return
-        
-        # Validate file before importing
-        is_valid, message = validate_payments_zip(file_path)
-        if not is_valid:
-            QMessageBox.warning(self, "Invalid File", message)
-            self.debug_output.append(message)
-            return
-        
-        try:
-            result = import_payments_data(file_path, self.db)
-            QMessageBox.information(self, "Success", "Payments imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"💰 MEESHO PAYMENTS IMPORT")
-            self.debug_output.append(f"{'='*60}")
-            self.debug_output.append(f"File: {os.path.basename(file_path)}")
-            self.debug_output.append('\n'.join(result))
-            self.debug_output.append(f"{'='*60}\n")
-            self.load_filters()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Import failed: {e}")
-            self.debug_output.append(f"❌ Error: {e}")
-    
     def import_invoices(self):
         """Import Meesho Tax Invoice Details from ZIP file."""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -500,17 +435,22 @@ class DashboardApp(QMainWindow):
         )
         if not file_path:
             return
-        
+
         # Validate file before importing
         is_valid, message = validate_flipkart_gst_excel(file_path)
         if not is_valid:
             QMessageBox.warning(self, "Invalid File", message)
             self.debug_output.append(message)
             return
-        
+
         try:
             result = import_flipkart_b2c(file_path, self.db)
-            QMessageBox.information(self, "Success", "Flipkart GST data imported successfully!")
+
+            # Save the Excel path so B2CS/HSN generators use official certified values
+            from logic import set_flipkart_gst_excel_path
+            set_flipkart_gst_excel_path(file_path)
+
+            QMessageBox.information(self, "Success", "Flipkart GST data imported successfully!\n\nOfficial GST values will be used for B2CS and HSN reports.")
             self.debug_output.append(f"\n{'='*60}")
             self.debug_output.append(f"📊 FLIPKART GST IMPORT")
             self.debug_output.append(f"{'='*60}")
@@ -623,11 +563,24 @@ class DashboardApp(QMainWindow):
         except (ValueError, AttributeError):
             return None
 
+    def _validate_gstin_selected(self):
+        """Validate that a valid GSTIN is selected. Returns (gstin, True) or (None, False)."""
+        gstin = self.supplier_combo.currentText().strip()
+        if not gstin or len(gstin) != 15:
+            QMessageBox.warning(
+                self, "No Seller Selected",
+                "Please select a valid Seller GSTIN before generating reports."
+            )
+            return None, False
+        return gstin, True
+
     def generate_b2cs_csv(self):
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             csv_debug = generate_gst_pivot_csv(fy, mn, gstin, self.db,
                 output_folder=self.base_folder)
             QMessageBox.information(self, "Success", "B2CS CSV generated.")
@@ -636,10 +589,12 @@ class DashboardApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"{e}")
 
     def generate_hsn_csv(self):
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             debug_csv = generate_gst_hsn_pivot_csv(fy, mn, gstin, self.db,
                 output_folder=self.base_folder)
             QMessageBox.information(self, "Success", "HSN WISE B2CS CSV generated.")
@@ -648,12 +603,10 @@ class DashboardApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"{e}")
 
     def generate_docs_csv(self):
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
-            # Get selected GSTIN
-            gstin = self.supplier_combo.currentText()
-            if not gstin or gstin == "All Suppliers":
-                QMessageBox.warning(self, "No Supplier Selected", "Please select a specific supplier (GSTIN) to generate documents.")
-                return
             
             files_used = []
             supplied_files = {}
@@ -719,62 +672,72 @@ class DashboardApp(QMainWindow):
     
     def export_b2b(self):
         """Generate B2B invoices CSV."""
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             csv_path = generate_b2b_csv(fy, mn, gstin, self.db, output_folder=self.base_folder)
             QMessageBox.information(self, "Success", f"B2B CSV saved at:\n{csv_path}")
             self.debug_output.append(f"✅ Generated: {csv_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Generation failed: {e}")
             self.debug_output.append(f"❌ Error: {e}")
-    
+
     def export_hsn_b2b(self):
         """Generate HSN B2B summary CSV."""
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             csv_path = generate_hsn_b2b_csv(fy, mn, gstin, self.db, output_folder=self.base_folder)
             QMessageBox.information(self, "Success", f"HSN B2B CSV saved at:\n{csv_path}")
             self.debug_output.append(f"✅ Generated: {csv_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Generation failed: {e}")
             self.debug_output.append(f"❌ Error: {e}")
-    
+
     def export_b2cl(self):
         """Generate B2CL large invoices CSV."""
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             csv_path = generate_b2cl_csv(fy, mn, gstin, self.db, output_folder=self.base_folder)
             QMessageBox.information(self, "Success", f"B2CL CSV saved at:\n{csv_path}")
             self.debug_output.append(f"✅ Generated: {csv_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Generation failed: {e}")
             self.debug_output.append(f"❌ Error: {e}")
-    
+
     def export_cdnr(self):
         """Generate credit/debit notes CSV."""
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             csv_path = generate_cdnr_csv(fy, mn, gstin, self.db, output_folder=self.base_folder)
             QMessageBox.information(self, "Success", f"CDNR CSV saved at:\n{csv_path}")
             self.debug_output.append(f"✅ Generated: {csv_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Generation failed: {e}")
             self.debug_output.append(f"❌ Error: {e}")
-    
+
     def export_gstr1_excel(self):
         """Generate complete GSTR-1 Excel workbook with all sheets."""
+        gstin, valid = self._validate_gstin_selected()
+        if not valid:
+            return
         try:
             fy = int(self.year_combo.currentText())
             mn = int(self.month_combo.currentText())
-            gstin = self.supplier_combo.currentText()  # Now a GSTIN string, not supplier_id
             excel_path = generate_gstr1_excel_workbook(fy, mn, gstin, self.db, output_folder=self.base_folder)
             QMessageBox.information(self, "Success", f"Complete GSTR-1 Excel saved at:\n{excel_path}")
             self.debug_output.append(f"✅ Generated: {excel_path}")

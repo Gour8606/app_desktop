@@ -44,21 +44,6 @@ def auto_migrate():
                 'supplier_name': 'VARCHAR',
                 'last_updated': 'DATETIME',
             },
-            'meesho_inventory': {
-                'seller_gstin': 'VARCHAR',
-            },
-            'meesho_payments': {
-                'seller_gstin': 'VARCHAR',
-            },
-            'meesho_ads_cost': {
-                'seller_gstin': 'VARCHAR',
-            },
-            'meesho_referral_payments': {
-                'seller_gstin': 'VARCHAR',
-            },
-            'meesho_compensation_recovery': {
-                'seller_gstin': 'VARCHAR',
-            },
             'flipkart_orders': {
                 'seller_gstin': 'VARCHAR',
             },
@@ -120,8 +105,6 @@ def auto_migrate():
                 inspector = inspect(engine)
                 
                 tables_needing_index = [
-                    'meesho_inventory', 'meesho_payments', 'meesho_ads_cost',
-                    'meesho_referral_payments', 'meesho_compensation_recovery',
                     'flipkart_orders', 'flipkart_returns',
                     'amazon_orders', 'amazon_returns'
                 ]
@@ -174,31 +157,6 @@ def verify_multi_seller_setup() -> list:
             messages.append("⚠️  No seller mappings found. Import GST data to create mappings.")
         else:
             messages.append(f"✅ {mapping_count} seller mapping(s) configured")
-        
-        # Check if seller_gstin columns exist and have data
-        from models import MeeshoInventory, MeeshoPayment
-        
-        inv_total = db.query(MeeshoInventory).count()
-        inv_with_gstin = db.query(MeeshoInventory).filter(MeeshoInventory.seller_gstin != None).count()
-        
-        if inv_total > 0:
-            if inv_with_gstin == 0:
-                messages.append(f"⚠️  Inventory: {inv_total} records need GSTIN tagging (re-import required)")
-            elif inv_with_gstin < inv_total:
-                messages.append(f"⚠️  Inventory: {inv_with_gstin}/{inv_total} records have GSTIN")
-            else:
-                messages.append(f"✅ Inventory: All {inv_total} records have GSTIN")
-        
-        pay_total = db.query(MeeshoPayment).count()
-        pay_with_gstin = db.query(MeeshoPayment).filter(MeeshoPayment.seller_gstin != None).count()
-        
-        if pay_total > 0:
-            if pay_with_gstin == 0:
-                messages.append(f"⚠️  Payments: {pay_total} records need GSTIN tagging (re-import required)")
-            elif pay_with_gstin < pay_total:
-                messages.append(f"⚠️  Payments: {pay_with_gstin}/{pay_total} records have GSTIN")
-            else:
-                messages.append(f"✅ Payments: All {pay_total} records have GSTIN")
         
         db.close()
         

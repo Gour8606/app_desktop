@@ -4,7 +4,7 @@ import zipfile
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from models import MeeshoSale, MeeshoReturn, MeeshoOrder, MeeshoInventory, MeeshoPayment, MeeshoInvoice, MeeshoAdsCost, MeeshoReferralPayment, MeeshoCompensationRecovery
+from models import MeeshoSale, MeeshoReturn, MeeshoInvoice
 import shutil
 
 
@@ -71,60 +71,6 @@ def validate_meesho_tax_invoice_zip(filepath: str) -> tuple[bool, str]:
                 return False, "❌ Wrong file! Meesho Tax Invoice ZIP should contain: orders_*.csv, tcs_sales.xlsx, or tcs_sales_return.xlsx"
             
             return True, "✅ Valid Meesho Tax Invoice ZIP"
-    except zipfile.BadZipFile:
-        return False, "❌ Invalid ZIP file! File is corrupted or not a valid ZIP archive."
-    except Exception as e:
-        return False, f"❌ Error reading ZIP file: {str(e)}"
-
-
-def validate_inventory_excel(filepath: str) -> tuple[bool, str]:
-    """Validate that Excel contains Meesho inventory data."""
-    if not filepath.lower().endswith(('.xlsx', '.xls')):
-        return False, "❌ Wrong file type! Please select an Excel file (.xlsx or .xls)."
-    
-    try:
-        df = pd.read_excel(filepath, nrows=1)
-        required_cols = ['PRODUCT ID', 'CATALOG ID', 'CATALOG NAME', 'PRODUCT NAME', 'STOCK']
-        
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        missing = [col for col in required_cols if col not in df.columns]
-        
-        if missing:
-            # Check if it's a different marketplace file
-            if 'ORDER ID' in df.columns and 'FSN' in df.columns:
-                return False, "❌ Wrong file! This appears to be a Flipkart Sales Report. Please use the Import Flipkart Sales button."
-            if 'SUB ORDER NO' in df.columns:
-                return False, "❌ Wrong file! This appears to be a Meesho Order file. Please use the Import Meesho Tax Invoice button."
-            if 'INVOICE NO' in df.columns or 'INVOICE NUMBER' in df.columns:
-                return False, "❌ Wrong file! This appears to be an Invoice file. Please use the Import Meesho GST Report button."
-            
-            return False, f"❌ Wrong file! Meesho Inventory Excel should have columns: {', '.join(required_cols)}\nMissing: {', '.join(missing)}"
-        
-        return True, "✅ Valid Meesho Inventory Excel"
-    except Exception as e:
-        return False, f"❌ Error reading Excel file: {str(e)}"
-
-
-def validate_payments_zip(filepath: str) -> tuple[bool, str]:
-    """Validate that ZIP contains Meesho payment files."""
-    if not filepath.lower().endswith('.zip'):
-        return False, "❌ Wrong file type! Please select a ZIP file for Meesho Payments."
-    
-    try:
-        with zipfile.ZipFile(filepath, 'r') as zip_ref:
-            files = [f.lower() for f in zip_ref.namelist()]
-            
-            # Check for payment-related Excel files
-            has_payment_excel = any(f.endswith('.xlsx') or f.endswith('.xls') for f in files)
-            
-            if not has_payment_excel:
-                return False, "❌ Wrong file! Meesho Payments ZIP should contain Excel files with payment data."
-            
-            # Check if it's not an Amazon or Flipkart file
-            if any('mtr' in f or 'amazon' in f for f in files):
-                return False, "❌ Wrong file! This appears to be an Amazon ZIP. Please use the Amazon buttons instead."
-            
-            return True, "✅ Valid Meesho Payments ZIP"
     except zipfile.BadZipFile:
         return False, "❌ Invalid ZIP file! File is corrupted or not a valid ZIP archive."
     except Exception as e:
@@ -300,85 +246,22 @@ def import_from_zip(zip_path: str, db: Session) -> list:
 
     sales_file = None
     returns_file = None
-    orders_file = None
 
     for file in os.listdir(extract_dir):
         if "tcs_sales.xlsx" in file.lower():
             sales_file = os.path.join(extract_dir, file)
         elif "tcs_sales_return.xlsx" in file.lower():
             returns_file = os.path.join(extract_dir, file)
-        elif file.lower().startswith("orders_") and file.lower().endswith(".csv"):
-            orders_file = os.path.join(extract_dir, file)
 
     if sales_file:
         messages += import_sales_data(sales_file, db)
     if returns_file:
         messages += import_returns_data(returns_file, db)
-    if orders_file:
-        messages += import_orders_data(orders_file, db)
-def import_orders_data(filepath: str, db: Session) -> list:
-    import pandas as pd
-    messages = []
-    df = pd.read_csv(filepath)
 
-    # Clean column names
-    df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
-
-    # Remove any rows with missing Sub Order No
-    df = df[df["Sub Order No"].notna()]
-
-    # Delete existing orders for this file's date range (optional: could use order_date min/max)
-    db.query(MeeshoOrder).delete(synchronize_session=False)
-    db.commit()
-    messages.append(f"Existing orders data deleted before import from {os.path.basename(filepath)}")
-
-    # Build product_name -> product_id mapping from MeeshoInventory
-    product_mapping = {}
-    inventories = db.query(MeeshoInventory).all()
-    for inv in inventories:
-        if inv.product_name:
-            product_mapping[inv.product_name.lower().strip()] = inv.product_id
-
-    for _, row in df.iterrows():
-        product_name = row.get("Product Name", "").strip()
-        # Lookup product_id from inventory mapping
-        product_id = product_mapping.get(product_name.lower()) if product_name else None
-        
-        record = MeeshoOrder(
-            reason_for_credit_entry=row.get("Reason for Credit Entry", ""),
-            sub_order_no=row.get("Sub Order No", ""),
-            order_date=parse_date(row.get("Order Date")),
-            customer_state=row.get("Customer State", ""),
-            product_name=product_name,
-            product_id=product_id,  # Now populated from inventory
-            sku=row.get("SKU", ""),
-            size=row.get("Size", ""),
-            quantity=int(row.get("Quantity") or 0),
-            supplier_listed_price=safe_float(row.get("Supplier Listed Price (Incl. GST + Commission)")),
-            supplier_discounted_price=safe_float(row.get("Supplier Discounted Price (Incl GST and Commision)")),
-            packet_id=row.get("Packet Id", "")
-        )
-        db.add(record)
-
-    try:
-        db.commit()
-        messages.append(f"Orders data imported from {os.path.basename(filepath)} with product_id mapping")
-    except IntegrityError:
-        db.rollback()
-        messages.append(f"Duplicate skipped during orders import.")
-    except Exception as e:
-        db.rollback()
-        messages.append(f"Error during orders import: {e}")
+    # Clean up temp directory
+    shutil.rmtree(extract_dir, ignore_errors=True)
 
     return messages
-
-    for file in os.listdir(extract_dir):
-        os.remove(os.path.join(extract_dir, file))
-    os.rmdir(extract_dir)
-
-    return messages
-
-
 def import_sales_data(filepath: str, db: Session) -> list:
     from models import SellerMapping
     df = pd.read_excel(filepath)
@@ -490,29 +373,19 @@ def import_returns_data(filepath: str, db: Session) -> list:
     db.commit()
     messages.append(f"Existing returns data deleted for FY {fy}, Month {mn}, Supplier {sid}")
 
-    # Build product_name -> product_id mapping from MeeshoInventory
-    product_mapping = {}
-    inventories = db.query(MeeshoInventory).all()
-    for inv in inventories:
-        if inv.product_name:
-            product_mapping[inv.product_name.lower().strip()] = inv.product_id
-
     for _, row in df.iterrows():
-        # Try to get product_name from "Product Name" or "product_name" columns
         product_name = row.get("Product Name") or row.get("product_name", "")
         if isinstance(product_name, str):
             product_name = product_name.strip()
-        # Lookup product_id from inventory mapping
-        product_id = product_mapping.get(product_name.lower()) if product_name else None
-        
+
         record = MeeshoReturn(
             identifier=row.get("identifier", ""),
             sup_name=row.get("sup_name", ""),
             gstin=row.get("gstin", ""),
             sub_order_num=row.get("sub_order_num", ""),
             order_date=parse_date(row.get("order_date")),
-            product_name=product_name,  # Added
-            product_id=product_id,  # Added with inventory mapping
+            product_name=product_name,
+            product_id=None,
             hsn_code=int(row.get("hsn_code") or 0),
             quantity=int(row.get("quantity") or 0),
             gst_rate=safe_float(row.get("gst_rate")),
@@ -538,461 +411,6 @@ def import_returns_data(filepath: str, db: Session) -> list:
         db.rollback()
         messages.append(f"Error during returns import: {e}")
 
-    return messages
-
-
-def import_inventory_data(filepath: str, db: Session, seller_gstin: str = None) -> list:
-    """Import inventory data from Excel file with multi-seller support.
-    
-    Args:
-        filepath: Path to inventory Excel file
-        db: Database session
-        seller_gstin: GSTIN of the seller (optional - if not provided, will try to detect)
-    """
-    from models import SellerMapping
-    messages = []
-    try:
-        # Read Excel file - row 0 has headers, row 1 has descriptions, data starts at row 2
-        df = pd.read_excel(filepath, skiprows=1)
-        df.columns = [str(c).strip().upper().replace(" ", "_") for c in df.columns]
-        
-        # Try to determine seller GSTIN
-        if not seller_gstin:
-            # Try to extract supplier_id from filename
-            # Supports multiple formats:
-            # - {supplier_id}_inventory.xlsx
-            # - Inventory-Update-File_2025-11-21T23-52-21_{supplier_id}
-            # - Any filename ending with _{supplier_id} or containing supplier_id before extension
-            import re
-            filename = os.path.basename(filepath)
-            
-            # Try pattern 1: supplier_id at the end (before extension)
-            # Example: Inventory-Update-File_2025-11-21T23-52-21_1258379.xlsx
-            match = re.search(r'_(\d{6,})(?:\.\w+)?$', filename)
-            
-            # Try pattern 2: supplier_id followed by _inventory
-            if not match:
-                match = re.search(r'(\d{6,})_inventory', filename, re.IGNORECASE)
-            
-            if match:
-                supplier_id = int(match.group(1))
-                # Look up GSTIN from mapping
-                mapping = db.query(SellerMapping).filter(SellerMapping.supplier_id == supplier_id).first()
-                if mapping:
-                    seller_gstin = mapping.gstin
-                    messages.append(f"✅ Detected seller: Supplier {supplier_id} → GSTIN {seller_gstin}")
-        
-        if not seller_gstin:
-            messages.append("⚠️ Warning: seller_gstin not specified. Import GST data first to create seller mapping, or provide GSTIN parameter.")
-            messages.append("⚠️ Inventory will be imported without GSTIN tagging (may cause issues in multi-seller setup)")
-        
-        count_new = 0
-        count_updated = 0
-        count_skipped = 0
-        
-        for _, row in df.iterrows():
-            # Skip empty rows or description rows
-            if pd.isna(row.get("PRODUCT_NAME")) or str(row.get("SERIAL_NO")).lower() == "row identifier":
-                continue
-            
-            product_id = str(row.get("PRODUCT_ID", ""))
-            variation_id = str(row.get("VARIATION_ID", ""))
-            
-            # Check if this product already exists for this seller
-            existing = db.query(MeeshoInventory).filter(
-                MeeshoInventory.product_id == product_id,
-                MeeshoInventory.variation_id == variation_id,
-                MeeshoInventory.seller_gstin == seller_gstin
-            ).first()
-            
-            if existing:
-                # Update existing inventory
-                existing.catalog_name = str(row.get("CATALOG_NAME", ""))
-                existing.catalog_id = str(row.get("CATALOG_ID", ""))
-                existing.product_name = str(row.get("PRODUCT_NAME", ""))
-                existing.style_id = str(row.get("STYLE_ID", ""))
-                existing.variation = str(row.get("VARIATION", ""))
-                existing.current_stock = int(row.get("STOCK") or 0)
-                existing.system_stock_count = int(row.get("SYSTEM_STOCK_COUNT") or 0)
-                existing.your_stock_count = int(row.get("YOUR_STOCK_COUNT") or 0)
-                existing.last_updated = datetime.now()
-                count_updated += 1
-            else:
-                # Add new inventory record
-                record = MeeshoInventory(
-                    catalog_name=str(row.get("CATALOG_NAME", "")),
-                    catalog_id=str(row.get("CATALOG_ID", "")),
-                    product_name=str(row.get("PRODUCT_NAME", "")),
-                    product_id=product_id,
-                    style_id=str(row.get("STYLE_ID", "")),
-                    variation_id=variation_id,
-                    variation=str(row.get("VARIATION", "")),
-                    current_stock=int(row.get("STOCK") or 0),
-                    system_stock_count=int(row.get("SYSTEM_STOCK_COUNT") or 0),
-                    your_stock_count=int(row.get("YOUR_STOCK_COUNT") or 0),
-                    seller_gstin=seller_gstin,
-                    last_updated=datetime.now()
-                )
-                db.add(record)
-                count_new += 1
-        
-        db.commit()
-        messages.append(f"✅ Inventory import complete: {count_new} new, {count_updated} updated")
-    except Exception as e:
-        db.rollback()
-        messages.append(f"❌ Error importing inventory: {e}")
-    
-    return messages
-
-
-def import_payments_data(zip_path: str, db: Session, seller_gstin: str = None) -> list:
-    """Extract and import payment data from ZIP file (all sheets) with multi-seller support.
-    
-    Args:
-        zip_path: Path to payment ZIP file
-        db: Database session
-        seller_gstin: GSTIN of the seller (optional - will try to detect from sub_order_no)
-    """
-    from models import SellerMapping
-    messages = []
-    
-    # If seller_gstin not provided, try to detect from filename or sub_order data
-    detected_gstin = seller_gstin
-    
-    # Try to extract supplier_id from filename if GSTIN not provided
-    if not detected_gstin:
-        import re
-        filename = os.path.basename(zip_path)
-        
-        # Try pattern 1: supplier_id at the end (before extension)
-        # Example: Payment-Report_2025-11-21T23-52-21_1258379.zip
-        match = re.search(r'_(\d{6,})(?:\.\w+)?$', filename)
-        
-        # Try pattern 2: supplier_id followed by _payment
-        if not match:
-            match = re.search(r'(\d{6,})_payment', filename, re.IGNORECASE)
-        
-        if match:
-            supplier_id = int(match.group(1))
-            # Look up GSTIN from mapping
-            mapping = db.query(SellerMapping).filter(SellerMapping.supplier_id == supplier_id).first()
-            if mapping:
-                detected_gstin = mapping.gstin
-                messages.append(f"✅ Detected seller from filename: Supplier {supplier_id} → GSTIN {detected_gstin}")
-    
-    try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            # Find Excel file
-            excel_files = [f for f in zip_ref.namelist() if f.endswith('.xlsx')]
-            if not excel_files:
-                return ["❌ No Excel file found in payment ZIP"]
-            
-            excel_file = excel_files[0]
-            
-            # Try to extract supplier_id from Excel filename inside ZIP if not detected yet
-            if not detected_gstin:
-                import re
-                excel_filename = os.path.basename(excel_file)
-                
-                # Pattern: {supplier_id}_SP_ORDER_ADS_REFERRAL_PAYMENT_FILE...
-                # Example: 1258379_SP_ORDER_ADS_REFERRAL_PAYMENT_FILE_PREVIOUS_PAYMENT_2025-10-01_2025-10-31.xlsx
-                match = re.search(r'^(\d{6,})_', excel_filename)
-                
-                if match:
-                    supplier_id = int(match.group(1))
-                    # Look up GSTIN from mapping
-                    mapping = db.query(SellerMapping).filter(SellerMapping.supplier_id == supplier_id).first()
-                    if mapping:
-                        detected_gstin = mapping.gstin
-                        messages.append(f"✅ Detected seller from Excel filename: Supplier {supplier_id} → GSTIN {detected_gstin}")
-            
-            # ============ IMPORT ORDER PAYMENTS SHEET ============
-            try:
-                # Row 0: Category headers (Order Related Details, Payment Details, etc.) - SKIP
-                # Row 1: Actual column names (Sub Order No, Order Date, etc.) - USE AS HEADER
-                # Row 2: Placeholder/formula row (nan, 'A', 'B', etc.) - SKIP
-                # Row 3+: Actual data rows - IMPORT
-                df = pd.read_excel(zip_ref.open(excel_file), sheet_name="Order Payments", header=1, skiprows=[2])
-                
-                if df.shape[0] < 1:
-                    messages.append("⚠️  No payment data found")
-                else:
-                    # Normalize column names
-                    df.columns = [str(col).strip().lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", "").replace(",", "").replace("%", "percent").replace("&", "and") for col in df.columns]
-                    
-                    # Try to detect seller GSTIN from first sub_order_no if not provided
-                    if not detected_gstin and not df.empty:
-                        first_suborder = str(df["sub_order_no"].iloc[0])
-                        # Look up GSTIN from MeeshoSale
-                        sale = db.query(MeeshoSale).filter(MeeshoSale.sub_order_num == first_suborder).first()
-                        if sale and sale.gstin:
-                            detected_gstin = sale.gstin
-                            messages.append(f"✅ Detected seller GSTIN from sub_order_no: {detected_gstin}")
-                    
-                    if not detected_gstin:
-                        messages.append("⚠️ Warning: seller_gstin not detected. Import GST data first, or provide GSTIN parameter.")
-                        messages.append("⚠️ Payment data will be imported without GSTIN tagging (may cause issues in multi-seller setup)")
-                    
-                    count_new = 0
-                    count_updated = 0
-                    
-                    # Process actual data rows
-                    for _, row in df.iterrows():
-                        # Skip rows without sub order number
-                        if pd.isna(row.get("sub_order_no")):
-                            continue
-                        
-                        sub_order_no = str(row.get("sub_order_no", ""))
-                        
-                        # Check if this payment already exists
-                        existing = db.query(MeeshoPayment).filter(
-                            MeeshoPayment.sub_order_no == sub_order_no
-                        ).first()
-                        
-                        payment_data = {
-                            # Order Related Details (9 columns)
-                            "sub_order_no": sub_order_no,
-                            "order_date": parse_date(row.get("order_date")),
-                            "dispatch_date": parse_date(row.get("dispatch_date")),
-                            "product_name": str(row.get("product_name", "")) if not pd.isna(row.get("product_name")) else None,
-                            "supplier_sku": str(row.get("supplier_sku", "")) if not pd.isna(row.get("supplier_sku")) else None,
-                            "live_order_status": str(row.get("live_order_status", "")) if not pd.isna(row.get("live_order_status")) else None,
-                            "product_gst_percent": safe_float(row.get("product_gst_percent")),
-                            "listing_price_incl_taxes": safe_float(row.get("listing_price_incl_taxes")),
-                            "quantity": int(row.get("quantity", 0)) if not pd.isna(row.get("quantity")) else 0,
-                            
-                            # Payment Details (3 columns)
-                            "transaction_id": str(row.get("transaction_id", "")) if not pd.isna(row.get("transaction_id")) else None,
-                            "payment_date": parse_date(row.get("payment_date")),
-                            "final_settlement_amount": safe_float(row.get("final_settlement_amount")),
-                            
-                            # Revenue Details (7 columns)
-                            "price_type": str(row.get("price_type", "")) if not pd.isna(row.get("price_type")) else None,
-                            "total_sale_amount_incl_shipping_gst": safe_float(row.get("total_sale_amount_incl_shipping_and_gst")),
-                            "total_sale_return_amount_incl_shipping_gst": safe_float(row.get("total_sale_return_amount_incl_shipping_and_gst")),
-                            "fixed_fee_incl_gst": safe_float(row.get("fixed_fee_incl_gst")),
-                            "warehousing_fee_inc_gst": safe_float(row.get("warehousing_fee_inc_gst")),
-                            "return_premium_incl_gst": safe_float(row.get("return_premium_incl_gst")),
-                            "return_premium_incl_gst_of_return": safe_float(row.get("return_premium_incl_gst_of_return")),
-                            
-                            # Deductions (9 columns)
-                            "meesho_commission_percentage": safe_float(row.get("meesho_commission_percentage")),
-                            "meesho_commission_incl_gst": safe_float(row.get("meesho_commission_incl_gst")),
-                            "meesho_gold_platform_fee_incl_gst": safe_float(row.get("meesho_gold_platform_fee_incl_gst")),
-                            "meesho_mall_platform_fee_incl_gst": safe_float(row.get("meesho_mall_platform_fee_incl_gst")),
-                            "fixed_fee_deduction_incl_gst": safe_float(row.get("fixed_fee_incl_gst1")),  # Excel has duplicate "Fixed Fee" column
-                            "warehousing_fee_deduction_incl_gst": safe_float(row.get("warehousing_fee_incl_gst")),
-                            "return_shipping_charge_incl_gst": safe_float(row.get("return_shipping_charge_incl_gst")),
-                            "gst_compensation_prp_shipping": safe_float(row.get("gst_compensation_prp_shipping")),
-                            "shipping_charge_incl_gst": safe_float(row.get("shipping_charge_incl_gst")),
-                            
-                            # Other Charges (4 columns)
-                            "other_support_service_charges_excl_gst": safe_float(row.get("other_support_service_charges_excl_gst")),
-                            "waivers_excl_gst": safe_float(row.get("waivers_excl_gst")),
-                            "net_other_support_service_charges_excl_gst": safe_float(row.get("net_other_support_service_charges_excl_gst")),
-                            "gst_on_net_other_support_service_charges": safe_float(row.get("gst_on_net_other_support_service_charges")),
-                            
-                            # TCS & TDS (3 columns)
-                            "tcs": safe_float(row.get("tcs")),
-                            "tds_rate_percent": safe_float(row.get("tds_rate_percent")),
-                            "tds": safe_float(row.get("tds")),
-                            
-                            # Recovery, Claims and Compensation Details (6 columns)
-                            "compensation": safe_float(row.get("compensation")),
-                            "claims": safe_float(row.get("claims")),
-                            "recovery": safe_float(row.get("recovery")),
-                            "compensation_reason": str(row.get("compensation_reason", "")) if not pd.isna(row.get("compensation_reason")) else None,
-                            "claims_reason": str(row.get("claims_reason", "")) if not pd.isna(row.get("claims_reason")) else None,
-                            "recovery_reason": str(row.get("recovery_reason", "")) if not pd.isna(row.get("recovery_reason")) else None,
-                            
-                            # Multi-seller support
-                            "seller_gstin": detected_gstin
-                        }
-                        
-                        if existing:
-                            # Update existing payment
-                            for key, value in payment_data.items():
-                                setattr(existing, key, value)
-                            count_updated += 1
-                        else:
-                            # Add new payment
-                            record = MeeshoPayment(**payment_data)
-                            db.add(record)
-                            count_new += 1
-                    
-                    db.commit()
-                    messages.append(f"✅ Order Payments imported: {count_new} new, {count_updated} updated")
-            except Exception as e:
-                db.rollback()
-                messages.append(f"⚠️  Order Payments error: {str(e)[:50]}")
-            
-            # ============ IMPORT ADS COST SHEET ============
-            try:
-                # Ads Cost has single header row at row 1 (row 0 is "Ads Cost" title)
-                df_ads = pd.read_excel(zip_ref.open(excel_file), sheet_name="Ads Cost", header=1)
-                
-                if df_ads.shape[0] >= 1:
-                    # Normalize column names
-                    df_ads.columns = [str(col).strip().lower().replace(" ", "_").replace("/", "_").replace(".", "") for col in df_ads.columns]
-                    
-                    count_ads_new = 0
-                    count_ads_updated = 0
-                    
-                    # Process data rows (skip empty first row)
-                    for _, row in df_ads.iterrows():
-                        # Skip empty rows
-                        if pd.isna(row.get("deduction_date")):
-                            continue
-                        
-                        campaign_id = str(row.get("campaign_id", ""))
-                        deduction_date = parse_date(row.get("deduction_date"))
-                        
-                        # Check if exists
-                        existing = db.query(MeeshoAdsCost).filter(
-                            MeeshoAdsCost.campaign_id == campaign_id,
-                            MeeshoAdsCost.deduction_date == deduction_date,
-                            MeeshoAdsCost.seller_gstin == detected_gstin
-                        ).first()
-                        
-                        if existing:
-                            existing.deduction_duration = str(row.get("deduction_duration", ""))
-                            existing.ad_cost = safe_float(row.get("ad_cost"))
-                            existing.credits_waivers_discounts = safe_float(row.get("credits___waivers___discounts"))
-                            existing.ad_cost_incl_credits_waivers = safe_float(row.get("ad_cost_incl_credits_waivers_discounts"))
-                            existing.gst = safe_float(row.get("gst"))
-                            existing.total_ads_cost = safe_float(row.get("total_ads_cost"))
-                            count_ads_updated += 1
-                        else:
-                            record = MeeshoAdsCost(
-                                deduction_duration=str(row.get("deduction_duration", "")),
-                                deduction_date=deduction_date,
-                                campaign_id=campaign_id,
-                                ad_cost=safe_float(row.get("ad_cost")),
-                                credits_waivers_discounts=safe_float(row.get("credits___waivers___discounts")),
-                                ad_cost_incl_credits_waivers=safe_float(row.get("ad_cost_incl_credits_waivers_discounts")),
-                                gst=safe_float(row.get("gst")),
-                                total_ads_cost=safe_float(row.get("total_ads_cost")),
-                                seller_gstin=detected_gstin
-                            )
-                            db.add(record)
-                            count_ads_new += 1
-                    
-                    db.commit()
-                    messages.append(f"✅ Ads Cost imported: {count_ads_new} new, {count_ads_updated} updated")
-                else:
-                    messages.append("⚠️  Ads Cost sheet is empty")
-            except Exception as e:
-                db.rollback()
-                messages.append(f"⚠️  Ads Cost error: {str(e)[:50]}")
-            
-            # ============ IMPORT REFERRAL PAYMENTS SHEET ============
-            try:
-                df_ref = pd.read_excel(zip_ref.open(excel_file), sheet_name="Referral Payments", header=None)
-                
-                if df_ref.shape[0] >= 1:
-                    # Get headers from row 0
-                    headers_ref = [str(df_ref.iloc[0, col_idx]).lower().replace(" ", "_") for col_idx in range(df_ref.shape[1])]
-                    df_ref.columns = headers_ref
-                    
-                    count_ref_new = 0
-                    count_ref_updated = 0
-                    
-                    # Skip header row (row 0)
-                    for _, row in df_ref.iloc[1:].iterrows():
-                        if pd.isna(row.get("reward_id")):
-                            continue
-                        
-                        reward_id = str(row.get("reward_id", ""))
-                        
-                        # Check if exists
-                        existing = db.query(MeeshoReferralPayment).filter(
-                            MeeshoReferralPayment.reward_id == reward_id,
-                            MeeshoReferralPayment.seller_gstin == detected_gstin
-                        ).first()
-                        
-                        if existing:
-                            existing.payment_date = parse_date(row.get("payment_date"))
-                            existing.store_name = str(row.get("store_name", ""))
-                            existing.reason = str(row.get("reason", ""))
-                            existing.net_referral_amount = safe_float(row.get("net_referral_amount"))
-                            existing.taxes_gst_tds = safe_float(row.get("taxes_(gst/tds)"))
-                            count_ref_updated += 1
-                        else:
-                            record = MeeshoReferralPayment(
-                                reward_id=reward_id,
-                                payment_date=parse_date(row.get("payment_date")),
-                                store_name=str(row.get("store_name", "")),
-                                reason=str(row.get("reason", "")),
-                                net_referral_amount=safe_float(row.get("net_referral_amount")),
-                                taxes_gst_tds=safe_float(row.get("taxes_(gst/tds)")),
-                                seller_gstin=detected_gstin
-                            )
-                            db.add(record)
-                            count_ref_new += 1
-                    
-                    db.commit()
-                    messages.append(f"✅ Referral Payments imported: {count_ref_new} new, {count_ref_updated} updated")
-                else:
-                    messages.append("⚠️  Referral Payments sheet is empty")
-            except Exception as e:
-                db.rollback()
-                messages.append(f"⚠️  Referral Payments error: {str(e)[:50]}")
-            
-            # ============ IMPORT COMPENSATION AND RECOVERY SHEET ============
-            try:
-                df_comp = pd.read_excel(zip_ref.open(excel_file), sheet_name="Compensation and Recovery", header=None)
-                
-                if df_comp.shape[0] >= 1:
-                    # Get headers from row 0
-                    headers_comp = [str(df_comp.iloc[0, col_idx]).lower().replace(" ", "_") for col_idx in range(df_comp.shape[1])]
-                    df_comp.columns = headers_comp
-                    
-                    count_comp_new = 0
-                    count_comp_updated = 0
-                    
-                    # Skip header row (row 0)
-                    for _, row in df_comp.iloc[1:].iterrows():
-                        if pd.isna(row.get("date")):
-                            continue
-                        
-                        comp_date = parse_date(row.get("date"))
-                        program_name = str(row.get("program_name", ""))
-                        reason = str(row.get("reason", ""))
-                        
-                        # Check if exists (using date + program_name + reason as unique key)
-                        existing = db.query(MeeshoCompensationRecovery).filter(
-                            MeeshoCompensationRecovery.date == comp_date,
-                            MeeshoCompensationRecovery.program_name == program_name,
-                            MeeshoCompensationRecovery.reason == reason,
-                            MeeshoCompensationRecovery.seller_gstin == detected_gstin
-                        ).first()
-                        
-                        if existing:
-                            existing.amount_inc_gst = safe_float(row.get("amount_(inc_gst)_inr"))
-                            count_comp_updated += 1
-                        else:
-                            record = MeeshoCompensationRecovery(
-                                date=comp_date,
-                                program_name=program_name,
-                                reason=reason,
-                                amount_inc_gst=safe_float(row.get("amount_(inc_gst)_inr")),
-                                seller_gstin=detected_gstin
-                            )
-                            db.add(record)
-                            count_comp_new += 1
-                    
-                    db.commit()
-                    messages.append(f"✅ Compensation & Recovery imported: {count_comp_new} new, {count_comp_updated} updated")
-                else:
-                    messages.append("⚠️  Compensation & Recovery sheet is empty")
-            except Exception as e:
-                db.rollback()
-                messages.append(f"⚠️  Compensation & Recovery error: {str(e)[:50]}")
-    
-    except Exception as e:
-        db.rollback()
-        messages.append(f"❌ Error processing payment ZIP: {e}")
-    
     return messages
 
 
@@ -1060,11 +478,6 @@ def import_invoice_data(zip_path: str, db: Session) -> list:
     return messages
 
 
-# PDF import functionality removed - PDFs no longer needed
-    
-    return messages
-
-
 def import_flipkart_sales(filepath: str, db: Session) -> list:
     """
     Import Flipkart Sales Report Excel file with Sales Report and Cash Back Report sheets.
@@ -1089,8 +502,9 @@ def import_flipkart_sales(filepath: str, db: Session) -> list:
         pass
     
     if not seller_gstin:
-        messages.append("⚠️  No seller GSTIN available. Import Flipkart GST Report first to capture GSTIN.")
-        messages.append("ℹ️  Continuing import without GSTIN (can be updated later).")
+        messages.append("❌ IMPORT BLOCKED: No seller GSTIN available.")
+        messages.append("ℹ️  Please import the Flipkart GST Report first (to capture seller GSTIN), then retry this import.")
+        return messages
     
     try:
         # Read Sales Report sheet

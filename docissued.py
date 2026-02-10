@@ -41,47 +41,23 @@ def normalize_document_type(doc_type):
     # Return as-is if not a known type
     return doc_type
 
-def append_meesho_docs(meesho_excel_path, csv_rows):
-    """Read Meesho Tax_invoice_details.xlsx -> group by type+prefix -> append rows."""
-    df = pd.read_excel(meesho_excel_path, sheet_name="Invoice_Info")
-    df = df.dropna(subset=["Invoice No.", "Type"])
-    df["Cancelled"] = 0  # adjust if real cancelled data available
-
-    grouped = {}
-    for _, row in df.iterrows():
-        doc_type = row["Type"]
-        invoice_no = str(row["Invoice No."])
-        prefix, number = split_invoice_number(invoice_no)
-        key = (doc_type, prefix)
-        if key not in grouped:
-            grouped[key] = {"prefix": prefix, "numbers": [], "cancelled": 0, "total": 0}
-        grouped[key]["numbers"].append(number)
-        grouped[key]["total"] += 1
-        if row["Cancelled"] == 1:
-            grouped[key]["cancelled"] += 1
-
-    for (doc_type, prefix), data in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][1])):
-        min_num = min(data["numbers"])
-        max_num = max(data["numbers"])
-        sr_no_from = f"{prefix}{min_num}"
-        sr_no_to = f"{prefix}{max_num}"
-        csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
-
-def append_meesho_docs_from_db(db: Session, csv_rows, gstin=None):
+def append_meesho_docs_from_db(db: Session, csv_rows, gstin: str):
     """Read Meesho invoice data from database -> group by type+prefix -> append rows.
-    
+
     Args:
         db: Database session
         csv_rows: List to append rows to
-        gstin: Optional GSTIN to filter by. If None, includes all invoices.
+        gstin: GSTIN to filter by (required for data isolation).
     """
     from models import MeeshoInvoice, MeeshoSale
-    
-    # Build query with optional GSTIN filter
-    query = db.query(MeeshoInvoice)
-    if gstin:
-        # Join with MeeshoSale to filter by GSTIN
-        query = query.join(MeeshoSale, MeeshoInvoice.suborder_no == MeeshoSale.sub_order_num).filter(MeeshoSale.gstin == gstin)
+
+    if not gstin or not gstin.strip():
+        raise ValueError("gstin parameter is required for data isolation")
+
+    # Join with MeeshoSale to filter by GSTIN
+    query = db.query(MeeshoInvoice).join(
+        MeeshoSale, MeeshoInvoice.suborder_no == MeeshoSale.sub_order_num
+    ).filter(MeeshoSale.gstin == gstin)
     
     invoices = query.all()
     if not invoices:
@@ -111,39 +87,23 @@ def append_meesho_docs_from_db(db: Session, csv_rows, gstin=None):
             sr_no_to = sorted_pairs[-1][1]    # Last actual invoice number
             csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
 
-def append_flipkart_section13(flipkart_excel_path, csv_rows):
-    try:
-        df_fk = pd.read_excel(flipkart_excel_path, sheet_name="Section 13 in GSTR-1")
-        # Normalise column names
-        df_fk.columns = [" ".join(str(c).replace("\n", " ").replace("\r", " ").split()) for c in df_fk.columns]
-        required_cols = ["Invoice Series From", "Invoice Series To", "Total Number of Invoices", "Cancelled if any"]
-        for col in required_cols:
-            if col not in df_fk.columns:
-                raise ValueError(f"Missing expected column: {col} — actual columns: {df_fk.columns.tolist()}")
-
-        for _, row in df_fk.iterrows():
-            sr_from = str(row["Invoice Series From"]) if pd.notna(row["Invoice Series From"]) else ""
-            sr_to = str(row["Invoice Series To"]) if pd.notna(row["Invoice Series To"]) else ""
-            total = int(row["Total Number of Invoices"] or 0)
-            cancelled = int(row["Cancelled if any"] or 0)
-            csv_rows.append(["Invoice", sr_from, sr_to, total, cancelled])
-    except Exception as e:
-        print(f"⚠️ Could not append Flipkart Section 13: {e}")
-
-def append_flipkart_docs_from_db(db: Session, csv_rows, gstin=None):
+def append_flipkart_docs_from_db(db: Session, csv_rows, gstin: str):
     """Read Flipkart invoice data from database -> group by invoice prefix -> append rows.
-    
+
     Args:
         db: Database session
         csv_rows: List to append rows to
-        gstin: Optional GSTIN to filter by. If None, includes all invoices.
+        gstin: GSTIN to filter by (required for data isolation).
     """
     from models import FlipkartOrder
-    
-    # Build query with optional GSTIN filter
-    query = db.query(FlipkartOrder).filter(FlipkartOrder.buyer_invoice_id.isnot(None))
-    if gstin:
-        query = query.filter(FlipkartOrder.seller_gstin == gstin)
+
+    if not gstin or not gstin.strip():
+        raise ValueError("gstin parameter is required for data isolation")
+
+    query = db.query(FlipkartOrder).filter(
+        FlipkartOrder.buyer_invoice_id.isnot(None),
+        FlipkartOrder.seller_gstin == gstin
+    )
     
     orders = query.all()
     if not orders:
@@ -179,23 +139,24 @@ def append_flipkart_docs_from_db(db: Session, csv_rows, gstin=None):
             sr_no_to = sorted_pairs[-1][1]    # Last actual invoice number
             csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
 
-def append_amazon_docs_from_db(db: Session, csv_rows, gstin=None):
+def append_amazon_docs_from_db(db: Session, csv_rows, gstin: str):
     """Read Amazon invoice data from database -> group by order ID -> append rows.
-    
+
     Args:
         db: Database session
         csv_rows: List to append rows to
-        gstin: Optional GSTIN to filter by. If None, includes all invoices.
+        gstin: GSTIN to filter by (required for data isolation).
     """
     from models import AmazonOrder
-    
-    # Build query with optional GSTIN filter
+
+    if not gstin or not gstin.strip():
+        raise ValueError("gstin parameter is required for data isolation")
+
     query = db.query(AmazonOrder).filter(
         AmazonOrder.transaction_type == 'Shipment',
-        AmazonOrder.invoice_number.isnot(None)
+        AmazonOrder.invoice_number.isnot(None),
+        AmazonOrder.seller_gstin == gstin
     )
-    if gstin:
-        query = query.filter(AmazonOrder.seller_gstin == gstin)
     
     orders = query.all()
     
@@ -236,55 +197,6 @@ def append_amazon_docs_from_db(db: Session, csv_rows, gstin=None):
         sr_no_to = sorted_invoices[-1][0]   # Last invoice
         doc_type = normalize_document_type("Invoice")
         csv_rows.append([doc_type, sr_no_from, sr_no_to, total_orders, cancelled_orders])
-
-def append_amazon_document_series(amz_csv_path, csv_rows):
-    df_amz = pd.read_csv(amz_csv_path)
-    df_amz["Order_ID"] = df_amz["Order Id"].astype(str).str.strip()
-    df_amz["Invoice_Number"] = df_amz["Invoice Number"].astype(str).str.strip()
-    df_amz["Transaction_Type"] = df_amz["Transaction Type"].astype(str).str.strip().str.upper()
-
-    # Remove blanks
-    df_amz = df_amz[df_amz["Order_ID"].notna() & (df_amz["Order_ID"] != "")]
-
-    orderid_to_data = {}
-    for _, row in df_amz.iterrows():
-        oid = row["Order_ID"]
-        inv = row["Invoice_Number"]
-        shipped = (row["Transaction_Type"] == "SHIPMENT")
-        if oid not in orderid_to_data:
-            orderid_to_data[oid] = {"shipped": shipped, "invoices": set()}
-        else:
-            if shipped:
-                orderid_to_data[oid]["shipped"] = True
-        if inv and inv.lower() != "nan" and inv.strip() != "":
-            orderid_to_data[oid]["invoices"].add(inv)
-
-    unique_order_ids = sorted(orderid_to_data.keys())
-    total_orders = len(unique_order_ids)
-    cancelled_orders = sum(1 for data in orderid_to_data.values() if not data["shipped"])
-    all_invoices = sorted({inv for data in orderid_to_data.values() for inv in data["invoices"] if inv.strip() != ""})
-    sr_no_from = all_invoices[0] if all_invoices else ""
-    sr_no_to = all_invoices[-1] if all_invoices else ""
-
-    csv_rows.append(["Invoice", sr_no_from, sr_no_to, total_orders, cancelled_orders])
-
-def generate_docs_csv_from_all(meesho_excel_path, flipkart_excel_path, amazon_csv_path, output_csv="docs.csv"):
-    """Generate the combined 'Documents Issued' CSV from 3 dynamic inputs."""
-    if not (os.path.exists(meesho_excel_path) and os.path.exists(flipkart_excel_path) and os.path.exists(amazon_csv_path)):
-        raise FileNotFoundError("One or more input files are missing.")
-
-    csv_rows = []
-    append_meesho_docs(meesho_excel_path, csv_rows)
-    append_flipkart_section13(flipkart_excel_path, csv_rows)
-    append_amazon_document_series(amazon_csv_path, csv_rows)
-
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Nature of Document", "Sr. No. From", "Sr. No. To", "Total Number", "Cancelled"])
-        writer.writerows(csv_rows)
-
-    print(f"✅ {output_csv} generated with {len(csv_rows)} rows (Meesho + Flipkart + Amazon).")
-    return f"✅ Documents CSV written to {output_csv} with {len(csv_rows)} rows."
 
 def generate_docs_issued_csv(financial_year, month_number, gstin_or_supplier_id, db: Session, output_csv="docs.csv"):
     """Generate Documents Issued CSV from database for GSTR-1 filing.
