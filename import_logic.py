@@ -454,13 +454,20 @@ def import_invoice_data(zip_path: str, db: Session) -> list:
                     
                     order_date = pd.to_datetime(row.get("Order Date")) if pd.notna(row.get("Order Date")) else None
                     
+                    # Get GSTIN from linked MeeshoSale to ensure invoice isolation by seller
+                    meesho_sale = db.query(MeeshoSale).filter(
+                        MeeshoSale.sub_order_num == suborder_no
+                    ).first()
+                    gstin_from_sale = meesho_sale.gstin if meesho_sale else None
+                    
                     record = MeeshoInvoice(
                         invoice_type=str(row.get("Type", "")).strip(),
                         order_date=order_date,
                         suborder_no=suborder_no,
                         product_description=str(row.get("Product Description", "")).strip(),
                         hsn_code=str(row.get("HSN", "")).strip(),
-                        invoice_no=invoice_no
+                        invoice_no=invoice_no,
+                        gstin=gstin_from_sale  # Add GSTIN for data isolation
                     )
                     db.add(record)
                     count += 1
