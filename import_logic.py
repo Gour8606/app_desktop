@@ -316,7 +316,7 @@ def import_sales_data(filepath: str, db: Session) -> list:
         record = MeeshoSale(
             identifier=row.get("identifier", ""),
             sup_name=row.get("sup_name", ""),
-            gstin=row.get("gstin", ""),
+            gstin=gstin,
             sub_order_num=row.get("sub_order_num", ""),
             order_date=parse_date(row.get("order_date")),
             hsn_code=int(row.get("hsn_code") or 0),
@@ -348,6 +348,7 @@ def import_sales_data(filepath: str, db: Session) -> list:
 
 
 def import_returns_data(filepath: str, db: Session) -> list:
+    from models import SellerMapping
     df = pd.read_excel(filepath)
     messages = []
 
@@ -363,6 +364,9 @@ def import_returns_data(filepath: str, db: Session) -> list:
     fy = int(df["financial_year"].iloc[0])
     mn = int(df["month_number"].iloc[0])
     sid = int(df["supplier_id"].iloc[0])
+    
+    gstin = df["gstin"].iloc[0] if "gstin" in df.columns and not pd.isna(df["gstin"].iloc[0]) else None
+    sup_name = df["sup_name"].iloc[0] if "sup_name" in df.columns and not pd.isna(df["sup_name"].iloc[0]) else None
 
     # Delete existing returns data for this financial year, month number and supplier ID
     db.query(MeeshoReturn).filter(
@@ -381,7 +385,7 @@ def import_returns_data(filepath: str, db: Session) -> list:
         record = MeeshoReturn(
             identifier=row.get("identifier", ""),
             sup_name=row.get("sup_name", ""),
-            gstin=row.get("gstin", ""),
+            gstin=gstin,
             sub_order_num=row.get("sub_order_num", ""),
             order_date=parse_date(row.get("order_date")),
             product_name=product_name,
@@ -741,6 +745,26 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
         # Remove rows with missing Order Id
         df = df[df["Order Id"].notna()]
         
+        # REQUIRED: Get seller GSTIN from temp file (must import GST Report first)
+        seller_gstin = None
+        try:
+            import json
+            if os.path.exists('temp_flipkart_gstin.json'):
+                with open('temp_flipkart_gstin.json', 'r') as f:
+                    temp_config = json.load(f)
+                    seller_gstin = temp_config.get('last_flipkart_gstin')
+        except:
+            pass
+        
+        if not seller_gstin:
+            messages.append("❌ IMPORT BLOCKED: No seller GSTIN available for B2C ZIP report.")
+            messages.append("ℹ️  CRITICAL FOR DATA ISOLATION:")
+            messages.append("    1. Import Flipkart GST Report (Excel) FIRST")
+            messages.append("    2. Then import Flipkart B2C Report (ZIP) immediately after")
+            messages.append("    3. Do NOT switch between different sellers without re-importing GST")
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            return messages
+        
         shipments_count = 0
         cancellations_count = 0
         
@@ -755,7 +779,8 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
             if transaction_type == "Shipment":
                 # This is a shipment order
                 record = FlipkartOrder(
-                    marketplace="Flipkart",  # B2C reports are typically Flipkart
+                    marketplace="Flipkart",
+                    seller_gstin=seller_gstin,
                     order_id=str(row.get("Order Id", "")),
                     order_item_id=str(row.get("Shipment Item Id", "")),
                     product_title=str(row.get("Item Description", "")),
@@ -796,6 +821,7 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
                 # This is a cancellation
                 record = FlipkartReturn(
                     marketplace="Flipkart",
+                    seller_gstin=seller_gstin,
                     order_id=str(row.get("Order Id", "")),
                     order_item_id=str(row.get("Shipment Item Id", "")),
                     product_title=str(row.get("Item Description", "")),
