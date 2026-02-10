@@ -88,7 +88,7 @@ def append_meesho_docs_from_db(db: Session, csv_rows, gstin: str):
             csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
 
 def append_flipkart_docs_from_db(db: Session, csv_rows, gstin: str):
-    """Read Flipkart invoice data from database -> group by invoice prefix -> append rows.
+    """Read Flipkart SALES invoice data from database -> group by invoice prefix -> append rows.
 
     Args:
         db: Database session
@@ -100,9 +100,11 @@ def append_flipkart_docs_from_db(db: Session, csv_rows, gstin: str):
     if not gstin or not gstin.strip():
         raise ValueError("gstin parameter is required for data isolation")
 
+    # Filter for SALES ONLY (event_type='Sale'), exclude returns which are tracked separately
     query = db.query(FlipkartOrder).filter(
         FlipkartOrder.buyer_invoice_id.isnot(None),
-        FlipkartOrder.seller_gstin == gstin
+        FlipkartOrder.seller_gstin == gstin,
+        FlipkartOrder.event_type == 'Sale'  # Only sales invoices, not returns
     )
     
     orders = query.all()
@@ -137,6 +139,60 @@ def append_flipkart_docs_from_db(db: Session, csv_rows, gstin: str):
             sorted_pairs = sorted(zip(data["numbers"], data["invoices"]))
             sr_no_from = sorted_pairs[0][1]   # First actual invoice number
             sr_no_to = sorted_pairs[-1][1]    # Last actual invoice number
+            csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
+
+def append_flipkart_return_docs_from_db(db: Session, csv_rows, gstin: str):
+    """Read Flipkart RETURN invoice data from database -> group by invoice prefix -> append rows.
+    
+    Returns are tracked as Credit Notes in GSTR-1 Table 13.
+
+    Args:
+        db: Database session
+        csv_rows: List to append rows to
+        gstin: GSTIN to filter by (required for data isolation).
+    """
+    from models import FlipkartReturn
+
+    if not gstin or not gstin.strip():
+        raise ValueError("gstin parameter is required for data isolation")
+
+    # Query return invoices (credit notes)
+    query = db.query(FlipkartReturn).filter(
+        FlipkartReturn.buyer_invoice_id.isnot(None),
+        FlipkartReturn.seller_gstin == gstin
+    )
+    
+    returns = query.all()
+    if not returns:
+        return
+    
+    # Group return invoice numbers by prefix
+    invoice_numbers = []
+    for ret in returns:
+        invoice_no = ret.buyer_invoice_id or ""
+        if invoice_no and invoice_no.strip():
+            prefix, number = split_invoice_number(invoice_no)
+            invoice_numbers.append((prefix, number, invoice_no))
+    
+    if not invoice_numbers:
+        return
+    
+    # Group by prefix
+    grouped = {}
+    for prefix, number, full_invoice in invoice_numbers:
+        if prefix not in grouped:
+            grouped[prefix] = {"numbers": [], "invoices": [], "total": 0, "cancelled": 0}
+        grouped[prefix]["numbers"].append(number)
+        grouped[prefix]["invoices"].append(full_invoice)
+        grouped[prefix]["total"] += 1
+    
+    # Output return/credit note series
+    doc_type = normalize_document_type("Credit Note")  # Returns are credit notes
+    for prefix, data in sorted(grouped.items()):
+        if data["numbers"]:
+            sorted_pairs = sorted(zip(data["numbers"], data["invoices"]))
+            sr_no_from = sorted_pairs[0][1]
+            sr_no_to = sorted_pairs[-1][1]
             csv_rows.append([doc_type, sr_no_from, sr_no_to, data["total"], data["cancelled"]])
 
 def append_amazon_docs_from_db(db: Session, csv_rows, gstin: str):
@@ -227,10 +283,13 @@ def generate_docs_issued_csv(financial_year, month_number, gstin_or_supplier_id,
     # 1. Append Meesho docs from DB
     append_meesho_docs_from_db(db, csv_rows, gstin)
     
-    # 2. Append Flipkart docs from DB
+    # 2. Append Flipkart sales docs from DB
     append_flipkart_docs_from_db(db, csv_rows, gstin)
     
-    # 3. Append Amazon docs from DB
+    # 3. Append Flipkart return docs (credit notes) from DB
+    append_flipkart_return_docs_from_db(db, csv_rows, gstin)
+    
+    # 4. Append Amazon docs from DB
     append_amazon_docs_from_db(db, csv_rows, gstin)
     
     # 4. Aggregate rows by document type (combine multiple prefixes of same type)

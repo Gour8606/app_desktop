@@ -137,6 +137,10 @@ class FlipkartReturn(Base):
     return_amount = Column(Float)  # Negative invoice amount
     taxable_value = Column(Float)
 
+    # Invoice tracking for docs issued report
+    buyer_invoice_id = Column(String)  # For docs.csv tracking
+    buyer_invoice_date = Column(DateTime)
+
     # Tax rates - added for HSN calculations
     igst_rate = Column(Float)
     cgst_rate = Column(Float)
