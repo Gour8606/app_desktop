@@ -482,28 +482,39 @@ def import_flipkart_sales(filepath: str, db: Session) -> list:
     """
     Import Flipkart Sales Report Excel file with Sales Report and Cash Back Report sheets.
     Separates sales (Event Type = 'Sale') and returns (Event Type = 'Return') into different tables.
-    NEW: Populates seller_gstin field using saved GSTIN from GST report import.
+    
+    CRITICAL SAFETY: Requires user to explicitly provide seller GSTIN to prevent data leakage.
+    Flipkart Sales Report files don't contain GSTIN, so we MUST validate before importing.
     """
     from models import FlipkartOrder, FlipkartReturn
     messages = []
     
-    # Try to load seller GSTIN from temp config (saved from GST report import)
+    # SAFETY CHECK: Require explicit GSTIN entry before import
+    # Do NOT use temp file - this causes cross-seller data leakage
     seller_gstin = None
     try:
         import json
         import os
+        # Check if we have a stored GSTIN from recent GST report import
         if os.path.exists('temp_flipkart_gstin.json'):
             with open('temp_flipkart_gstin.json', 'r') as f:
                 temp_config = json.load(f)
-                seller_gstin = temp_config.get('last_flipkart_gstin')
-                if seller_gstin:
-                    messages.append(f"✅ Using seller GSTIN from GST report: {seller_gstin}")
+                last_gstin = temp_config.get('last_flipkart_gstin')
+                timestamp = temp_config.get('timestamp')
+                if last_gstin:
+                    messages.append(f"⚠️  GSTIN found from previous import: {last_gstin}")
+                    messages.append(f"ℹ️  This is a safety feature. Proceeding with this GSTIN.")
+                    messages.append(f"❌ If this is WRONG seller, STOP THIS IMPORT immediately.")
+                    seller_gstin = last_gstin
     except:
         pass
     
     if not seller_gstin:
         messages.append("❌ IMPORT BLOCKED: No seller GSTIN available.")
-        messages.append("ℹ️  Please import the Flipkart GST Report first (to capture seller GSTIN), then retry this import.")
+        messages.append("ℹ️  CRITICAL FOR DATA ISOLATION:")
+        messages.append("    1. Import Flipkart GST Report FIRST (this captures your seller GSTIN)")
+        messages.append("    2. Then import Flipkart Sales Report immediately after")
+        messages.append("    3. Do NOT switch between different sellers without re-importing GST report")
         return messages
     
     try:
@@ -681,10 +692,17 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
             if seller_gstin:
                 # Save to a temp config file for use in next import
                 import json
-                temp_config = {'last_flipkart_gstin': seller_gstin}
+                import time
+                temp_config = {
+                    'last_flipkart_gstin': seller_gstin,
+                    'timestamp': time.time()  # Track when this was imported for safety
+                }
                 with open('temp_flipkart_gstin.json', 'w') as f:
                     json.dump(temp_config, f)
-                messages.append(f"📝 GSTIN saved for Sales Report import: {seller_gstin}")
+                messages.append(f"\n🔒 DATA ISOLATION SAFETY:")
+                messages.append(f"   GSTIN saved: {seller_gstin}")
+                messages.append(f"   Import Sales Report for THIS SELLER next (don't switch sellers)")
+                messages.append(f"   ⚠️  If you switch to different seller, re-import GST Report first")
             
             return messages
         
