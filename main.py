@@ -219,13 +219,14 @@ class DashboardApp(QMainWindow):
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
-                cfg = json.load(open(CONFIG_FILE))
+                with open(CONFIG_FILE, "r") as f:
+                    cfg = json.load(f)
                 self.base_folder = cfg.get("base_folder", os.getcwd())
                 self.meesho_file = cfg.get("meesho_file", "")
                 self.flipkart_file = cfg.get("flipkart_file", "")
                 self.amz_gstr_file = cfg.get("amz_gstr_file", "")
                 self.amz_mtr_file = cfg.get("amz_mtr_file", "")
-            except:
+            except (json.JSONDecodeError, IOError):
                 pass
 
     def save_config(self):
@@ -236,7 +237,8 @@ class DashboardApp(QMainWindow):
             "amz_gstr_file": self.amz_gstr_file,
             "amz_mtr_file": self.amz_mtr_file
         }
-        json.dump(cfg, open(CONFIG_FILE, "w"))
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f)
 
     def _validate_config_paths_and_update_labels(self):
         for attr in ["meesho_file", "flipkart_file", "amz_gstr_file", "amz_mtr_file"]:

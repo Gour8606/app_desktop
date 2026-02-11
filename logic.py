@@ -1,4 +1,3 @@
-import numpy as np
 from sqlalchemy.orm import Session
 from models import MeeshoSale, MeeshoReturn, MeeshoInvoice
 from collections import defaultdict
@@ -7,12 +6,11 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 from constants import (
-    B2CL_INVOICE_THRESHOLD, TransactionType, DBFields, 
-    STATE_CODE_MAPPING, GSTR1Files, B2CLHeaders, CDNRHeaders,
-    get_state_code, is_b2b_transaction, generate_note_number,
+    B2CL_INVOICE_THRESHOLD, TransactionType,
+    STATE_CODE_MAPPING,
+    get_state_code, generate_note_number,
     NoteType
 )
-from error_handler import safe_float_conversion, safe_int_conversion
 
 
 def normalize_rate(rate_value):
