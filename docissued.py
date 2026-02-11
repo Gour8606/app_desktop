@@ -52,12 +52,11 @@ def append_meesho_docs_from_db(db: Session, csv_rows, gstin: str):
     if not gstin or not gstin.strip():
         raise ValueError("gstin parameter is required for data isolation")
 
-    # Join with MeeshoSale to filter by GSTIN - filter on both tables for data isolation
+    # Join with MeeshoSale to filter by GSTIN
     query = db.query(MeeshoInvoice).join(
         MeeshoSale, MeeshoInvoice.suborder_no == MeeshoSale.sub_order_num
     ).filter(
-        MeeshoSale.gstin == gstin,
-        MeeshoInvoice.gstin == gstin  # Double filter ensures invoices are isolated by seller GSTIN
+        MeeshoSale.gstin == gstin
     )
     
     invoices = query.all()
