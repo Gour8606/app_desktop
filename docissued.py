@@ -1,6 +1,9 @@
 import csv
+import logging
 import re
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 def split_invoice_number(invoice_no):
     """Split invoice into prefix and trailing digits for series grouping."""
@@ -267,7 +270,6 @@ def generate_docs_issued_csv(financial_year, month_number, gstin_or_supplier_id,
     Returns:
         Success message with file path
     """
-    from models import MeeshoSale
     from logic import get_gstin_for_supplier
     
     # Get GSTIN
@@ -327,10 +329,10 @@ def generate_docs_issued_csv(financial_year, month_number, gstin_or_supplier_id,
     
     if not final_rows:
         # No valid documents found
-        return f"⚠️ Warning: No valid documents found to generate docs.csv. Created empty file with headers only."
+        return "No valid documents found to generate docs.csv. Created empty file with headers only."
     
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter='\t')
+        writer = csv.writer(f)
         writer.writerow(["Nature of Document", "Sr. No. From", "Sr. No. To", "Total Number", "Cancelled"])
         writer.writerows(final_rows)
     

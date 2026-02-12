@@ -2,12 +2,19 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg-info/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
 
 # Runtime artifacts
 meesho_sales.log
 meesho_sales.db
 temp_flipkart_gstin.json
 extracted_temp/
+config.json
 
 # IDE
 .vscode/

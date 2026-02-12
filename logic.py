@@ -1,73 +1,67 @@
 from sqlalchemy.orm import Session
-from models import MeeshoSale, MeeshoReturn, MeeshoInvoice
+from models import MeeshoSale, MeeshoReturn
 from collections import defaultdict
 import csv
+import logging
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from constants import (
     B2CL_INVOICE_THRESHOLD, TransactionType,
     STATE_CODE_MAPPING,
     get_state_code, generate_note_number,
-    NoteType
+    NoteType,
+    normalize_rate, fy_month_to_date_range, resolve_gstin,
 )
 
-
-def normalize_rate(rate_value):
-    """
-    Normalize GST rate to percentage format (whole number).
-    Converts 0.05 -> 5.0, 0.12 -> 12.0, 0.18 -> 18.0, 5 -> 5.0, etc.
-    """
-    if rate_value is None or rate_value == 0:
-        return 0.0
-    
-    try:
-        rate = float(rate_value)
-    except (ValueError, TypeError):
-        return 0.0
-    
-    # If rate is between 0 and 1 (decimal format like 0.05, 0.12, 0.18), multiply by 100
-    if 0 < rate < 1:
-        rate = rate * 100
-    
-    # Return as 2-decimal float (e.g., 5.0, 12.0, 18.0)
-    return round(rate, 2)
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_CONFIG_FILE = os.path.join(_APP_DIR, "config.json")
 
 
-def get_flipkart_gst_excel_path(config_path="config.json"):
+
+# normalize_rate is imported from constants
+
+
+def get_flipkart_gst_excel_path(config_path=None):
     """
     Get the Flipkart GST Excel file path from configuration.
     Users should upload/import the file and configure the path.
     Returns the file path if configured, else None.
     """
+    if config_path is None:
+        config_path = _CONFIG_FILE
     import json
     try:
         with open(config_path, 'r') as f:
             config = json.load(f)
             return config.get('flipkart_gst_excel_path')
-    except:
+    except Exception:
         return None
 
-def set_flipkart_gst_excel_path(file_path, config_path="config.json"):
+def set_flipkart_gst_excel_path(file_path, config_path=None):
     """
     Set the Flipkart GST Excel file path in configuration.
     Call this after user uploads/selects the file through the UI.
     """
+    if config_path is None:
+        config_path = _CONFIG_FILE
     import json
     try:
         config = {}
         try:
             with open(config_path, 'r') as f:
                 config = json.load(f)
-        except:
+        except Exception:
             pass
-        
+
         config['flipkart_gst_excel_path'] = file_path
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
         return True
     except Exception as e:
-        print(f"Error setting Flipkart GST Excel path: {e}")
+        logger.error(f"Error setting Flipkart GST Excel path: {e}")
         return False
 
 def read_flipkart_gst_b2cs_data(excel_file_path):
@@ -96,7 +90,7 @@ def read_flipkart_gst_b2cs_data(excel_file_path):
         
         return data
     except Exception as e:
-        print(f"Error reading Flipkart GST B2CS data: {e}")
+        logger.error(f"Error reading Flipkart GST B2CS data: {e}")
         return None
 
 def read_flipkart_gst_hsn_data(excel_file_path):
@@ -143,7 +137,7 @@ def read_flipkart_gst_hsn_data(excel_file_path):
         
         return data
     except Exception as e:
-        print(f"Error reading Flipkart GST HSN data: {e}")
+        logger.error(f"Error reading Flipkart GST HSN data: {e}")
         return None
 def _extract_flipkart_excel_gstin(excel_file_path):
     """Extract the seller GSTIN from a Flipkart GST Excel file for validation."""
@@ -268,15 +262,7 @@ def generate_gst_pivot_csv(financial_year, month_number, gstin_or_supplier_id, d
             combined_data[(row["state"], round(row["gst_rate"], 2))] = combined_data.get((row["state"], round(row["gst_rate"], 2)), 0) + row["total_taxable_value"]
 
     # Calculate date range for Flipkart and Amazon queries
-    if month_number <= 3:
-        year = financial_year
-    else:
-        year = financial_year - 1
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
 
     # 2. Flipkart - Use certified GST Excel data when configured (validate GSTIN match)
     flipkart_excel = get_flipkart_gst_excel_path()
@@ -498,17 +484,8 @@ def generate_gst_hsn_pivot_csv(financial_year, month_number, gstin_or_supplier_i
             pivot_data[k]["igst_amount"] -= (rec.total_taxable_sale_value or 0) * rec.gst_rate / 100
 
     # Flipkart HSN merge - now from database
-    if month_number <= 3:  # Jan-Mar
-        year = financial_year
-    else:  # Apr-Dec
-        year = financial_year - 1
-    
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
-    
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
+
     flipkart_orders = []
     flipkart_returns = []
     hsn_rate_map = {}
@@ -698,27 +675,11 @@ def generate_b2b_csv(financial_year, month_number, gstin_or_supplier_id, db,
             Rate, Taxable Value, Cess Amount
     """
     from models import AmazonOrder, AmazonReturn
-    from datetime import datetime
-    
     # Calculate month start and end dates
-    if month_number <= 3:  # Jan-Mar
-        year = financial_year
-    else:  # Apr-Dec
-        year = financial_year - 1
-    
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
 
     # Resolve supplier GSTIN early for filtering
-    if isinstance(gstin_or_supplier_id, str) and len(gstin_or_supplier_id) == 15:
-        supplier_gstin = gstin_or_supplier_id
-    else:
-        supplier_gstin = get_gstin_for_supplier(gstin_or_supplier_id, db)
-        if not supplier_gstin:
-            raise ValueError(f"GSTIN not found for supplier ID {gstin_or_supplier_id}")
+    supplier_gstin = resolve_gstin(gstin_or_supplier_id, db)
 
     # Query B2B transactions (where customer GSTIN is present) - filtered by seller GSTIN
     b2b_orders = db.query(AmazonOrder).filter(
@@ -841,27 +802,11 @@ def generate_hsn_b2b_csv(financial_year, month_number, gstin_or_supplier_id, db,
             Integrated Tax Amount, Central Tax Amount, State/UT Tax Amount, Cess Amount
     """
     from models import AmazonOrder, AmazonReturn
-    from datetime import datetime
-
     # Calculate month start and end dates
-    if month_number <= 3:  # Jan-Mar
-        year = financial_year
-    else:  # Apr-Dec
-        year = financial_year - 1
-
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
 
     # Resolve supplier GSTIN for filtering
-    if isinstance(gstin_or_supplier_id, str) and len(gstin_or_supplier_id) == 15:
-        supplier_gstin = gstin_or_supplier_id
-    else:
-        supplier_gstin = get_gstin_for_supplier(gstin_or_supplier_id, db)
-        if not supplier_gstin:
-            raise ValueError(f"GSTIN not found for supplier ID {gstin_or_supplier_id}")
+    supplier_gstin = resolve_gstin(gstin_or_supplier_id, db)
 
     # Query B2B transactions (where customer GSTIN is present) - filtered by seller GSTIN
     b2b_orders = db.query(AmazonOrder).filter(
@@ -962,28 +907,14 @@ def generate_b2cl_csv(financial_year, month_number, gstin_or_supplier_id, db,
     Format: Invoice Number, Invoice date, Invoice Value, Place Of Supply, Applicable % of Tax Rate,
             Rate, Taxable Value, Cess Amount, E-Commerce GSTIN
     """
-    from models import AmazonOrder, AmazonReturn
-    from datetime import datetime
-    
+    from models import AmazonOrder
     # Calculate month start and end dates
-    if month_number <= 3:  # Jan-Mar
-        year = financial_year
-    else:  # Apr-Dec
-        year = financial_year - 1
-    
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
-    
-    # Get supplier state for determining inter/intra state - accept either GSTIN string or legacy supplier_id
-    if isinstance(gstin_or_supplier_id, str) and len(gstin_or_supplier_id) == 15:
-        supplier_gstin = gstin_or_supplier_id
-    else:
-        supplier_gstin = get_gstin_for_supplier(gstin_or_supplier_id, db)
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
+
+    # Get supplier state for determining inter/intra state
+    supplier_gstin = resolve_gstin(gstin_or_supplier_id, db)
     supplier_state_code = supplier_gstin[:2] if supplier_gstin and len(supplier_gstin) >= 2 else None
-    
+
     # Query B2C Large transactions (no customer GSTIN and invoice value > threshold)
     # Filtered by seller GSTIN to prevent cross-seller data leakage
     large_orders = db.query(AmazonOrder).filter(
@@ -1083,27 +1014,11 @@ def generate_cdnr_csv(financial_year, month_number, gstin_or_supplier_id, db,
             Rate, Taxable Value, Cess Amount
     """
     from models import AmazonReturn
-    from datetime import datetime
-
     # Calculate month start and end dates
-    if month_number <= 3:  # Jan-Mar
-        year = financial_year
-    else:  # Apr-Dec
-        year = financial_year - 1
-
-    month_start = datetime(year, month_number, 1)
-    if month_number == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, month_number + 1, 1)
+    month_start, month_end = fy_month_to_date_range(financial_year, month_number)
 
     # Resolve supplier GSTIN for filtering
-    if isinstance(gstin_or_supplier_id, str) and len(gstin_or_supplier_id) == 15:
-        supplier_gstin = gstin_or_supplier_id
-    else:
-        supplier_gstin = get_gstin_for_supplier(gstin_or_supplier_id, db)
-        if not supplier_gstin:
-            raise ValueError(f"GSTIN not found for supplier ID {gstin_or_supplier_id}")
+    supplier_gstin = resolve_gstin(gstin_or_supplier_id, db)
 
     # Query returns to B2B customers (those with GSTIN) - filtered by seller GSTIN
     b2b_returns = db.query(AmazonReturn).filter(
@@ -1216,20 +1131,19 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-    from datetime import datetime
     import tempfile
     import csv as csv_module
     
     # Determine output file path
     if not file_path:
         # Calculate calendar year from financial year and month
-        # FY 2025 = Apr 2025 to Mar 2026
-        # Months 4-12: Use financial_year (e.g., Oct 2025 for FY 2025)
-        # Months 1-3: Use financial_year + 1 (e.g., Jan 2026 for FY 2025)
+        # FY 2026 = Apr 2025 to Mar 2026 (end-year convention)
+        # Months 1-3: calendar year = financial_year (e.g., Jan 2026 for FY 2026)
+        # Months 4-12: calendar year = financial_year - 1 (e.g., Oct 2025 for FY 2026)
         if month_number <= 3:
-            year = financial_year + 1
-        else:
             year = financial_year
+        else:
+            year = financial_year - 1
         
         month_name = datetime(year, month_number, 1).strftime("%B")
         file_name = f"GSTR1_FY{financial_year}_{month_name}_{year}.xlsx"
@@ -1238,12 +1152,6 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
     # Create workbook
     wb = Workbook()
     wb.remove(wb.active)  # Remove default sheet
-    
-    # Create a summary sheet as the default/first sheet to avoid the openpyxl warning
-    ws_summary = wb.create_sheet("Summary", 0)
-    ws_summary['A1'] = f"GSTR-1 Report"
-    ws_summary['A2'] = f"Financial Year: {financial_year}"
-    ws_summary['A3'] = f"Month: {month_number}"
     
     # Define styling
     header_font = Font(bold=True, color="FFFFFF")
@@ -1274,9 +1182,9 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
                 try:
                     if cell.value:
                         max_length = max(max_length, len(str(cell.value)))
-                except:
+                except Exception:
                     pass
-            
+
             adjusted_width = min(max_length + 2, 50)  # Max width 50
             ws.column_dimensions[column_letter].width = adjusted_width
     
@@ -1314,7 +1222,7 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
             total_records += count
         table_count += 1
     except Exception as e:
-        print(f"⚠️  Warning: Could not generate B2B sheet: {e}")
+        logger.warning(f"Could not generate B2B sheet: {e}")
     
     # 2. B2CL Sheet
     try:
@@ -1341,7 +1249,7 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
             total_records += count
         table_count += 1
     except Exception as e:
-        print(f"⚠️  Warning: Could not generate B2CL sheet: {e}")
+        logger.warning(f"Could not generate B2CL sheet: {e}")
     
     # 3. B2CS Sheet (B2C Small - using generate_gst_pivot_csv)
     try:
@@ -1369,7 +1277,7 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
             total_records += count
         table_count += 1
     except Exception as e:
-        print(f"⚠️  Warning: Could not generate B2CS sheet: {e}")
+        logger.warning(f"Could not generate B2CS sheet: {e}")
     
     # 4. CDNR Sheet
     try:
@@ -1396,7 +1304,7 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
             total_records += count
         table_count += 1
     except Exception as e:
-        print(f"⚠️  Warning: Could not generate CDNR sheet: {e}")
+        logger.warning(f"Could not generate CDNR sheet: {e}")
     
     # 5. HSN Summary Sheet
     try:
@@ -1423,26 +1331,26 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
             total_records += count
         table_count += 1
     except Exception as e:
-        print(f"⚠️  Warning: Could not generate HSN sheet: {e}")
+        logger.warning(f"Could not generate HSN sheet: {e}")
     
     # 6. Add summary/index sheet as first sheet
     ws_summary = wb.create_sheet("Summary", 0)
     
     # Add summary information
-    # Financial year runs April to March
-    # April-December (months 4-12): Use financial_year as calendar year
-    # January-March (months 1-3): Use financial_year + 1 as calendar year
+    # FY uses end-year convention: FY 2026 = Apr 2025 to Mar 2026
+    # Months 1-3: calendar year = financial_year (e.g., Jan 2026 for FY 2026)
+    # Months 4-12: calendar year = financial_year - 1 (e.g., Oct 2025 for FY 2026)
     if month_number <= 3:
-        year = financial_year + 1  # Jan-Mar are in next calendar year
+        year = financial_year
     else:
-        year = financial_year  # Apr-Dec are in same calendar year
-    
+        year = financial_year - 1
+
     month_name = datetime(year, month_number, 1).strftime("%B %Y")
-    
+
     summary_data = [
         ["GSTR-1 Return Summary"],
         [""],
-        ["Financial Year:", f"FY {financial_year}-{financial_year+1}"],
+        ["Financial Year:", f"FY {financial_year - 1}-{financial_year}"],
         ["Period:", month_name],
         ["Generated On:", datetime.now().strftime("%d-%b-%Y %H:%M:%S")],
         [""],
@@ -1454,8 +1362,8 @@ def generate_gstr1_excel_workbook(financial_year, month_number, gstin_or_supplie
         ["  - HSN Summary", "HSN-wise summary"],
         [""],
         ["Statistics:", ""],
-        [f"  Total Tables Generated:", table_count],
-        [f"  Total Records:", total_records],
+        ["  Total Tables Generated:", table_count],
+        ["  Total Records:", total_records],
         [""],
         ["Instructions:", ""],
         ["  1. Review each sheet for accuracy"],

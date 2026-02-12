@@ -1,4 +1,5 @@
 import os
+import logging
 import pandas as pd
 import zipfile
 from datetime import datetime
@@ -6,6 +7,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models import MeeshoSale, MeeshoReturn, MeeshoInvoice
 import shutil
+
+logger = logging.getLogger(__name__)
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_TEMP_EXTRACT_DIR = os.path.join(_APP_DIR, "extracted_temp")
+_TEMP_GSTIN_FILE = os.path.join(_APP_DIR, "temp_flipkart_gstin.json")
 
 
 def parse_date(value):
@@ -24,23 +31,7 @@ def safe_float(value):
         return 0.0
 
 
-def normalize_gst_rate(rate_value):
-    """
-    Normalize GST rate to percentage format (whole number).
-    Converts 0.05 -> 5, 0.12 -> 12, 0.18 -> 18, 5 -> 5, etc.
-    Also handles edge cases like 0.0 or None.
-    """
-    if rate_value is None or rate_value == 0:
-        return 0.0
-    
-    rate = safe_float(rate_value)
-    
-    # If rate is between 0 and 1 (decimal format like 0.05, 0.12, 0.18), multiply by 100
-    if 0 < rate < 1:
-        rate = rate * 100
-    
-    # Return as 2-decimal float (e.g., 5.0, 12.0, 18.0)
-    return round(rate, 2)
+from constants import normalize_rate as normalize_gst_rate  # backward-compatible alias
 
 
 # ============================================================================
@@ -199,7 +190,7 @@ def validate_amazon_zip(filepath: str, expected_type: str = "B2B") -> tuple[bool
             
             # Check if it's a GSTR1 report (contains Excel)
             if expected_type == "GSTR1" and excel_files:
-                return True, f"✅ Valid Amazon GSTR1 ZIP (Excel format)"
+                return True, "Valid Amazon GSTR1 ZIP (Excel format)"
             
             # For B2B/B2C, check CSV files
             if not csv_files and not excel_files:
@@ -237,29 +228,28 @@ def import_from_zip(zip_path: str, db: Session) -> list:
     Returns a list of status messages for GUI display.
     """
     messages = []
-    extract_dir = "extracted_temp"
+    extract_dir = _TEMP_EXTRACT_DIR
     os.makedirs(extract_dir, exist_ok=True)
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_dir)
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
 
+        sales_file = None
+        returns_file = None
 
-    sales_file = None
-    returns_file = None
+        for file in os.listdir(extract_dir):
+            if "tcs_sales.xlsx" in file.lower():
+                sales_file = os.path.join(extract_dir, file)
+            elif "tcs_sales_return.xlsx" in file.lower():
+                returns_file = os.path.join(extract_dir, file)
 
-    for file in os.listdir(extract_dir):
-        if "tcs_sales.xlsx" in file.lower():
-            sales_file = os.path.join(extract_dir, file)
-        elif "tcs_sales_return.xlsx" in file.lower():
-            returns_file = os.path.join(extract_dir, file)
-
-    if sales_file:
-        messages += import_sales_data(sales_file, db)
-    if returns_file:
-        messages += import_returns_data(returns_file, db)
-
-    # Clean up temp directory
-    shutil.rmtree(extract_dir, ignore_errors=True)
+        if sales_file:
+            messages += import_sales_data(sales_file, db)
+        if returns_file:
+            messages += import_returns_data(returns_file, db)
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)
 
     return messages
 def import_sales_data(filepath: str, db: Session) -> list:
@@ -275,6 +265,10 @@ def import_sales_data(filepath: str, db: Session) -> list:
 
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if df.empty:
+        messages.append("⚠️ File has headers but no data rows. Nothing to import.")
+        return messages
 
     # Extract unique financial year, month number, and supplier ID from the data
     fy = int(df["financial_year"].iloc[0])
@@ -339,7 +333,7 @@ def import_sales_data(filepath: str, db: Session) -> list:
         messages.append(f"Sales data imported from {os.path.basename(filepath)}")
     except IntegrityError:
         db.rollback()
-        messages.append(f"Duplicate skipped during sales import.")
+        messages.append("Duplicate skipped during sales import.")
     except Exception as e:
         db.rollback()
         messages.append(f"Error during sales import: {e}")
@@ -348,7 +342,6 @@ def import_sales_data(filepath: str, db: Session) -> list:
 
 
 def import_returns_data(filepath: str, db: Session) -> list:
-    from models import SellerMapping
     df = pd.read_excel(filepath)
     messages = []
 
@@ -361,12 +354,15 @@ def import_returns_data(filepath: str, db: Session) -> list:
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    if df.empty:
+        messages.append("⚠️ Returns file has headers but no data rows. Nothing to import.")
+        return messages
+
     fy = int(df["financial_year"].iloc[0])
     mn = int(df["month_number"].iloc[0])
     sid = int(df["supplier_id"].iloc[0])
-    
+
     gstin = df["gstin"].iloc[0] if "gstin" in df.columns and not pd.isna(df["gstin"].iloc[0]) else None
-    sup_name = df["sup_name"].iloc[0] if "sup_name" in df.columns and not pd.isna(df["sup_name"].iloc[0]) else None
 
     # Delete existing returns data for this financial year, month number and supplier ID
     db.query(MeeshoReturn).filter(
@@ -410,7 +406,7 @@ def import_returns_data(filepath: str, db: Session) -> list:
         messages.append(f"Returns data imported from {os.path.basename(filepath)} with product_id mapping")
     except IntegrityError:
         db.rollback()
-        messages.append(f"Duplicate skipped during returns import.")
+        messages.append("Duplicate skipped during returns import.")
     except Exception as e:
         db.rollback()
         messages.append(f"Error during returns import: {e}")
@@ -438,6 +434,7 @@ def import_invoice_data(zip_path: str, db: Session) -> list:
             
             count = 0
             skipped = 0
+            errors = 0
             for _, row in df.iterrows():
                 if pd.isna(row.get("Suborder No.")):
                     continue
@@ -476,12 +473,16 @@ def import_invoice_data(zip_path: str, db: Session) -> list:
                     db.add(record)
                     count += 1
                 except Exception as row_err:
+                    errors += 1
+                    logger.warning(f"Skipped row {invoice_no}: {row_err}")
                     continue
-            
+
             db.commit()
-            messages.append(f"✅ Invoice data imported: {count} new invoices")
+            messages.append(f"Invoice data imported: {count} new invoices")
             if skipped > 0:
-                messages.append(f"   ⏭️ {skipped} duplicates skipped")
+                messages.append(f"   {skipped} duplicates skipped")
+            if errors > 0:
+                messages.append(f"   {errors} rows skipped due to errors (check logs)")
     except Exception as e:
         db.rollback()
         messages.append(f"❌ Error importing invoices: {e}")
@@ -507,19 +508,18 @@ def import_flipkart_sales(filepath: str, db: Session) -> list:
         import json
         import os
         # Check if we have a stored GSTIN from recent GST report import
-        if os.path.exists('temp_flipkart_gstin.json'):
-            with open('temp_flipkart_gstin.json', 'r') as f:
+        if os.path.exists(_TEMP_GSTIN_FILE):
+            with open(_TEMP_GSTIN_FILE, 'r') as f:
                 temp_config = json.load(f)
                 last_gstin = temp_config.get('last_flipkart_gstin')
-                timestamp = temp_config.get('timestamp')
                 if last_gstin:
-                    messages.append(f"⚠️  GSTIN found from previous import: {last_gstin}")
-                    messages.append(f"ℹ️  This is a safety feature. Proceeding with this GSTIN.")
-                    messages.append(f"❌ If this is WRONG seller, STOP THIS IMPORT immediately.")
+                    messages.append(f"GSTIN found from previous import: {last_gstin}")
+                    messages.append("This is a safety feature. Proceeding with this GSTIN.")
+                    messages.append("If this is WRONG seller, STOP THIS IMPORT immediately.")
                     seller_gstin = last_gstin
-    except:
+    except Exception:
         pass
-    
+
     if not seller_gstin:
         messages.append("❌ IMPORT BLOCKED: No seller GSTIN available.")
         messages.append("ℹ️  CRITICAL FOR DATA ISOLATION:")
@@ -637,7 +637,7 @@ def import_flipkart_sales(filepath: str, db: Session) -> list:
                 returns_count += 1
         
         db.commit()
-        messages.append(f"✅ Flipkart Sales Report imported:")
+        messages.append("Flipkart Sales Report imported:")
         messages.append(f"   📦 {sales_count} orders")
         messages.append(f"   🔄 {returns_count} returns/cancellations")
         if skipped_count > 0:
@@ -680,7 +680,7 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
                                 seller_gstin = str(gstin_value).strip()
                                 messages.append(f"✅ Seller GSTIN extracted: {seller_gstin}")
                                 break
-                    except:
+                    except Exception:
                         continue
             
             if not seller_gstin:
@@ -691,7 +691,7 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
             messages.append("⚠️  GST Report import is not required for sales tracking.")
             
             # Read the file to show what's available
-            messages.append(f"\n📋 GST Report Sections found:")
+            messages.append("\nGST Report Sections found:")
             for sheet in xl.sheet_names:
                 if sheet != 'Help':
                     df = pd.read_excel(filepath, sheet_name=sheet)
@@ -708,17 +708,17 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
                     'last_flipkart_gstin': seller_gstin,
                     'timestamp': time.time()  # Track when this was imported for safety
                 }
-                with open('temp_flipkart_gstin.json', 'w') as f:
+                with open(_TEMP_GSTIN_FILE, 'w') as f:
                     json.dump(temp_config, f)
-                messages.append(f"\n🔒 DATA ISOLATION SAFETY:")
+                messages.append("\nDATA ISOLATION SAFETY:")
                 messages.append(f"   GSTIN saved: {seller_gstin}")
-                messages.append(f"   Import Sales Report for THIS SELLER next (don't switch sellers)")
-                messages.append(f"   ⚠️  If you switch to different seller, re-import GST Report first")
+                messages.append("   Import Sales Report for THIS SELLER next (don't switch sellers)")
+                messages.append("   If you switch to different seller, re-import GST Report first")
             
             return messages
         
         # If it's a ZIP file, try to process as B2C report (old format)
-        extract_dir = "extracted_temp"
+        extract_dir = _TEMP_EXTRACT_DIR
         os.makedirs(extract_dir, exist_ok=True)
         
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -749,13 +749,13 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
         seller_gstin = None
         try:
             import json
-            if os.path.exists('temp_flipkart_gstin.json'):
-                with open('temp_flipkart_gstin.json', 'r') as f:
+            if os.path.exists(_TEMP_GSTIN_FILE):
+                with open(_TEMP_GSTIN_FILE, 'r') as f:
                     temp_config = json.load(f)
                     seller_gstin = temp_config.get('last_flipkart_gstin')
-        except:
+        except Exception:
             pass
-        
+
         if not seller_gstin:
             messages.append("❌ IMPORT BLOCKED: No seller GSTIN available for B2C ZIP report.")
             messages.append("ℹ️  CRITICAL FOR DATA ISOLATION:")
@@ -846,7 +846,7 @@ def import_flipkart_b2c(filepath: str, db: Session) -> list:
                 cancellations_count += 1
         
         db.commit()
-        messages.append(f"✅ Flipkart B2C Report imported:")
+        messages.append("Flipkart B2C Report imported:")
         messages.append(f"   📦 {shipments_count} shipments")
         messages.append(f"   ❌ {cancellations_count} cancellations")
         
@@ -872,7 +872,7 @@ def import_amazon_mtr(filepath: str, db: Session) -> list:
     
     try:
         # Extract ZIP file
-        extract_dir = "extracted_temp"
+        extract_dir = _TEMP_EXTRACT_DIR
         os.makedirs(extract_dir, exist_ok=True)
         
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -1039,7 +1039,7 @@ def import_amazon_mtr(filepath: str, db: Session) -> list:
                 returns_count += 1
         
         db.commit()
-        messages.append(f"✅ Amazon MTR Report imported:")
+        messages.append("Amazon MTR Report imported:")
         messages.append(f"   📦 {shipments_count} shipments")
         messages.append(f"   🔄 {returns_count} returns/cancellations")
         if skipped_count > 0:
@@ -1066,7 +1066,7 @@ def import_amazon_gstr1(filepath: str, db: Session) -> list:
     
     try:
         # Extract ZIP file
-        extract_dir = "extracted_temp"
+        extract_dir = _TEMP_EXTRACT_DIR
         os.makedirs(extract_dir, exist_ok=True)
         
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -1089,7 +1089,7 @@ def import_amazon_gstr1(filepath: str, db: Session) -> list:
         
         # Read the file to validate and show what's available
         xl = pd.ExcelFile(excel_file)
-        messages.append(f"\n📋 GSTR-1 Report Sections found:")
+        messages.append("\nGSTR-1 Report Sections found:")
         
         b2c_small_data = None
         hsn_summary_data = None

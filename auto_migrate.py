@@ -123,8 +123,8 @@ def auto_migrate():
                             conn.execute(text(f'CREATE INDEX {index_name} ON {table_name} (seller_gstin)'))
                             conn.commit()
                             messages.append(f"✅ Created index: {index_name}")
-                        except Exception as e:
-                            messages.append(f"⚠️  Index {index_name} may already exist")
+                        except Exception:
+                            messages.append(f"Index {index_name} may already exist")
             
             except Exception as e:
                 messages.append(f"⚠️  Index creation: {str(e)[:50]}")
@@ -146,22 +146,20 @@ def verify_multi_seller_setup() -> list:
     """
     messages = []
     
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        
         # Check if seller_mapping table exists and has data
         from models import SellerMapping
         mapping_count = db.query(SellerMapping).count()
-        
+
         if mapping_count == 0:
-            messages.append("⚠️  No seller mappings found. Import GST data to create mappings.")
+            messages.append("No seller mappings found. Import GST data to create mappings.")
         else:
-            messages.append(f"✅ {mapping_count} seller mapping(s) configured")
-        
-        db.close()
-        
+            messages.append(f"{mapping_count} seller mapping(s) configured")
     except Exception as e:
-        messages.append(f"⚠️  Verification error: {str(e)[:50]}")
+        messages.append(f"Verification error: {str(e)[:50]}")
+    finally:
+        db.close()
     
     return messages
 

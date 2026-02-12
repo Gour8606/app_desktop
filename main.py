@@ -1,17 +1,20 @@
-﻿import sys
+import sys
 import os
 import json
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QPushButton, QComboBox,
     QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QTextEdit,
-    QFileDialog, QMessageBox, QHBoxLayout, QDialog, QProgressBar
+    QFileDialog, QMessageBox, QHBoxLayout
 )
 from PySide6.QtCore import Qt
 
 
 
-from database import SessionLocal, engine, Base
+from database import SessionLocal
 from models import MeeshoSale
 from import_logic import (
     import_from_zip, import_invoice_data, import_flipkart_sales, import_flipkart_b2c,
@@ -19,14 +22,15 @@ from import_logic import (
     validate_meesho_tax_invoice_zip, validate_invoices_zip,
     validate_flipkart_sales_excel, validate_flipkart_gst_excel, validate_amazon_zip
 )
-from docissued import append_meesho_docs_from_db, append_flipkart_docs_from_db, append_amazon_docs_from_db
+from docissued import append_meesho_docs_from_db, append_flipkart_docs_from_db, append_flipkart_return_docs_from_db, append_amazon_docs_from_db
 from logic import (
     generate_gst_pivot_csv, generate_gst_hsn_pivot_csv,
     generate_b2b_csv, generate_hsn_b2b_csv, generate_b2cl_csv, generate_cdnr_csv, generate_gstr1_excel_workbook
 )
 from auto_migrate import auto_migrate, verify_multi_seller_setup
 
-CONFIG_FILE = "config.json"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 
 # Automatic database migration on app startup
 def initialize_database():
@@ -35,30 +39,23 @@ def initialize_database():
     Creates missing tables and adds missing columns.
     Safe to run every time - idempotent operation.
     """
-    print("\n" + "="*60)
-    print("DATABASE INITIALIZATION")
-    print("="*60)
-    
+    logger.info("DATABASE INITIALIZATION")
+
     # Run auto-migration
     migration_messages = auto_migrate()
     for msg in migration_messages:
-        print(msg)
-    
+        logger.info(msg)
+
     # Verify multi-seller setup
-    print("\nMulti-Seller Setup Status:")
+    logger.info("Multi-Seller Setup Status:")
     verify_messages = verify_multi_seller_setup()
     for msg in verify_messages:
-        print(msg)
-    
-    print("="*60 + "\n")
-
-# Run database initialization before launching the app
-initialize_database()
+        logger.info(msg)
 
 class DashboardApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Meesho Sales & GST Desktop Dashboard")
+        self.setWindowTitle("GST Desktop Dashboard - Meesho | Flipkart | Amazon")
         self.setMinimumSize(1000, 600)
 
         # Defaults
@@ -226,8 +223,8 @@ class DashboardApp(QMainWindow):
                 self.flipkart_file = cfg.get("flipkart_file", "")
                 self.amz_gstr_file = cfg.get("amz_gstr_file", "")
                 self.amz_mtr_file = cfg.get("amz_mtr_file", "")
-            except (json.JSONDecodeError, IOError):
-                pass
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Could not load config file: {e}")
 
     def save_config(self):
         cfg = {
@@ -237,8 +234,11 @@ class DashboardApp(QMainWindow):
             "amz_gstr_file": self.amz_gstr_file,
             "amz_mtr_file": self.amz_mtr_file
         }
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(cfg, f)
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(cfg, f)
+        except IOError as e:
+            logger.warning(f"Could not save config file: {e}")
 
     def _validate_config_paths_and_update_labels(self):
         for attr in ["meesho_file", "flipkart_file", "amz_gstr_file", "amz_mtr_file"]:
@@ -293,7 +293,6 @@ class DashboardApp(QMainWindow):
     # --- Filters load ---
     def load_filters(self):
         from models import FlipkartOrder, AmazonOrder
-        from datetime import datetime
         
         self.year_combo.clear()
         self.month_combo.clear()
@@ -360,9 +359,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_from_zip(file_path, self.db)
             QMessageBox.information(self, "Success", "Meesho GST Report imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📦 MEESHO GST REPORT IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("MEESHO GST REPORT IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             if result:
                 self.debug_output.append('\n'.join(result))
@@ -390,9 +389,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_invoice_data(file_path, self.db)
             QMessageBox.information(self, "Success", "Meesho Tax Invoice Details imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📄 MEESHO TAX INVOICE DETAILS IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("MEESHO TAX INVOICE DETAILS IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -419,9 +418,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_flipkart_sales(file_path, self.db)
             QMessageBox.information(self, "Success", "Flipkart sales data imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"🛒 FLIPKART SALES IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("FLIPKART SALES IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -453,9 +452,9 @@ class DashboardApp(QMainWindow):
             set_flipkart_gst_excel_path(file_path)
 
             QMessageBox.information(self, "Success", "Flipkart GST data imported successfully!\n\nOfficial GST values will be used for B2CS and HSN reports.")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📊 FLIPKART GST IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("FLIPKART GST IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -482,9 +481,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_amazon_mtr(file_path, self.db)
             QMessageBox.information(self, "Success", "Amazon B2B data imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📦 AMAZON B2B IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("AMAZON B2B IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -511,9 +510,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_amazon_mtr(file_path, self.db)
             QMessageBox.information(self, "Success", "Amazon B2C data imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"🛍️ AMAZON B2C IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("AMAZON B2C IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -540,9 +539,9 @@ class DashboardApp(QMainWindow):
         try:
             result = import_amazon_gstr1(file_path, self.db)
             QMessageBox.information(self, "Success", "Amazon GSTR1 data imported successfully!")
-            self.debug_output.append(f"\n{'='*60}")
-            self.debug_output.append(f"📊 AMAZON GSTR1 IMPORT")
-            self.debug_output.append(f"{'='*60}")
+            self.debug_output.append("\n" + "=" * 60)
+            self.debug_output.append("AMAZON GSTR1 IMPORT")
+            self.debug_output.append("=" * 60)
             self.debug_output.append(f"File: {os.path.basename(file_path)}")
             self.debug_output.append('\n'.join(result))
             self.debug_output.append(f"{'='*60}\n")
@@ -655,6 +654,7 @@ class DashboardApp(QMainWindow):
                 append_meesho_docs_from_db(self.db, csv_rows, gstin=gstin)
             if supplied_files.get("flipkart_db"):
                 append_flipkart_docs_from_db(self.db, csv_rows, gstin=gstin)
+                append_flipkart_return_docs_from_db(self.db, csv_rows, gstin=gstin)
             if supplied_files.get("amazon_db"):
                 append_amazon_docs_from_db(self.db, csv_rows, gstin=gstin)
             
@@ -760,7 +760,26 @@ class DashboardApp(QMainWindow):
                 
 
 
+    def closeEvent(self, event):
+        """Clean up resources on application exit."""
+        try:
+            self.save_config()
+        except Exception:
+            pass
+        try:
+            self.db.close()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    initialize_database()
     app = QApplication(sys.argv)
     w = DashboardApp()
     w.show()

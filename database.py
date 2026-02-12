@@ -1,8 +1,10 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Using SQLite database file in the current directory
-SQLALCHEMY_DATABASE_URL = "sqlite:///meesho_sales.db"
+# Database file lives alongside this script, not in the CWD
+_DB_DIR = os.path.dirname(os.path.abspath(__file__))
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{os.path.join(_DB_DIR, 'meesho_sales.db')}"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
